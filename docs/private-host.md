@@ -1,5 +1,7 @@
 # 私人 Windows 主機與手機 PWA（M1）
 
+目前第一輪請使用 [獨立驗收指南](acceptance-guide.md)。腳本預設 Acceptance、必須指定 NodeHome，驗收用 3006 與專屬資料根；以下一般模式範例只有明確選擇 Normal 才可使用。本次不在私人主機執行。
+
 ## 狀態與成本
 
 雲端已驗證依賴、完整測試、前後端正式建置、正式 HTTP 伺服器與 PWA 快取策略。
@@ -13,11 +15,11 @@ Windows PowerShell、Tailscale、Android/iOS 安裝、麥克風、鍵盤與背�
 
 ```powershell
 # 在工作分支的 repo 根目錄，首次安裝或更新（先停止伺服器）
-powershell.exe -NoProfile -File .\scripts\windows\Install.ps1
+powershell.exe -NoProfile -File .\scripts\windows\Install.ps1 -Mode Normal -NodeHome "C:\Tools\Node 24"
 # 前景監督程序；請以同一 Windows 帳號執行，完整路徑方便 Stop 安全辨識
-powershell.exe -NoProfile -File "C:\path\japanese-tutor-mugi\scripts\windows\Start.ps1" -AllowedHost "your-pc.your-tailnet.ts.net"
+powershell.exe -NoProfile -File "C:\path\japanese-tutor-mugi\scripts\windows\Start.ps1" -Mode Normal -NodeHome "C:\Tools\Node 24" -AllowedHost "your-pc.your-tailnet.ts.net"
 # 另一個視窗，停止本專案記錄且可驗證身份的進程
-powershell.exe -NoProfile -File .\scripts\windows\Stop.ps1
+powershell.exe -NoProfile -File .\scripts\windows\Stop.ps1 -Mode Normal
 ```
 
 腳本不修改 PowerShell 全機執行原則。若系統禁止腳本，先由主機管理員檢查並選擇適當的本機政策。
@@ -30,7 +32,7 @@ Start 每 10 秒檢查 `/api/health`，連續 3 次失敗停止子進程；退�
 以排他鎖拒絕重複啟動；停止腳本驗證 PID、建立時間、執行檔及完整指令列，身份不明時拒絕操作，不依 image name 全域關閉 Node。
 異常關機後鎖會由 OS 釋放；新版本可恢復已核實的孤兒程序。舊 PID 檔、損壞記錄或查詢權限問題依本文件末的複審說明處理，不盲目刪除。
 
-可在「工作排程器」建立 **目前使用者** 的登入觸發工作：程式 `powershell.exe`，引數 `-NoProfile -File "完整路徑\scripts\windows\Start.ps1" -AllowedHost "精確的.ts.net主機名"`，起始位置為 repo；不需最高權限，設定「已執行則不啟動新執行個體」。建議先人工測試重啟與停止，再啟用開機維運。登出/無登入時執行需另驗證帳號、檔案權限與 Tailscale 服務；此處不代替安裝 Windows Service。
+可在「工作排程器」建立 **目前使用者** 的登入觸發工作：程式 `powershell.exe`，引數 `-NoProfile -File "完整路徑\scripts\windows\Start.ps1" -Mode Normal -NodeHome "C:\Tools\Node 24" -AllowedHost "精確的.ts.net主機名"`，起始位置為 repo；不需最高權限，設定「已執行則不啟動新執行個體」。建議先人工測試重啟與停止，再啟用開機維運。登出/無登入時執行需另驗證帳號、檔案權限與 Tailscale 服務；此處不代替安裝 Windows Service。
 
 ## Tailscale 私人 HTTPS
 
@@ -79,7 +81,7 @@ Service Worker 只預存離線提示頁及兩張公開圖示，不儲存應用 H
 ### 部署前精簡實測（不要直接使用正式資料）
 
 1. 在獨立副本備份 `.env.local`、`.usage`、圖片/聊天匯出及登入資料。使用 Node 24，先執行 Install，再在 Windows PowerShell 5.1 與 PowerShell 7 各執行 `-NoProfile -File "完整路徑\scripts\windows\Test-Runtime.ps1"`（mock 檢查）。
-2. 用各版本 PowerShell 的 `-NoProfile -File "完整路徑\scripts\windows\Start.ps1" -AllowedHost "精確主機名.ts.net"` 啟動；驗證本機 `/api/health`、頁面、內建話題、角色設定及 Mock 測試。不設定真實 AI 金鑰即可完成此步。
+2. 用各版本 PowerShell 的 `-NoProfile -File "完整路徑\scripts\windows\Start.ps1" -Mode Normal -NodeHome "C:\Tools\Node 24" -AllowedHost "精確主機名.ts.net"` 啟動；驗證本機 `/api/health`、頁面、內建話題、角色設定及 Mock 測試。此為歷史一般模式檢查；第一輪必須改用獨立驗收模式，不能只靠不填金鑰。
 3. 第二視窗重複 Start/Install 應拒絕；另開與 Mugi 無關的 Node，執行 Stop 後確認它仍存活，Mugi 不再重啟且 `.runtime` 記錄完成清理。
 4. 在測試副本模擬 supervisor 意外終止，確認孤兒 Node 仍能由新 Start/Stop 依身份恢復。模擬損壞記錄/活的舊 PID 檔必須拒絕猜測殺程序。不要對正式資料做故障注入。
 5. 只啟用私人 Tailscale Serve，確認 ACL；Android/iOS 開 HTTPS、加入主畫面、打字/語音權限允許與拒絕、橫向/鍵盤/背景恢復、離線重連。DevTools 確認 Cache Storage 僅公開離線頁及圖示，手機不能寫金鑰/登入。

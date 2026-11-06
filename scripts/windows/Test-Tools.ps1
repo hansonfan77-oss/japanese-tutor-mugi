@@ -19,7 +19,7 @@ function Assert-Rejected([scriptblock]$Action, [string]$Message) {
     $failed = $false; try { & $Action | Out-Null } catch { $failed = $true }; Assert-Check $failed $Message
 }
 try {
-    if (!$SourceNodeHome) { $SourceNodeHome = Split-Path (Get-Command node.exe -CommandType Application).Source }
+    if (!$SourceNodeHome) { $SourceNodeHome = Split-Path ((Get-Command node.exe -CommandType Application | Select-Object -First 1).Source) }
     New-Item -ItemType Directory -Force $nodeHome, $checkout | Out-Null
     Copy-Item (Join-Path $SourceNodeHome 'node.exe') (Join-Path $nodeHome 'node.exe')
     New-Item -ItemType Directory -Force (Join-Path $nodeHome 'node_modules') | Out-Null
@@ -68,7 +68,7 @@ try {
     $ready = $false
     for ($i = 0; $i -lt 45; $i++) {
         if ($supervisor.HasExited) { $detail = Get-Content (Join-Path $testRoot 'supervisor-err.txt') -Raw; throw "Fixture supervisor exited before readiness: $detail" }
-        try { $health = Invoke-RestMethod 'http://127.0.0.1:3006/api/health' -TimeoutSec 2; $ready = $health.runMode -eq 'acceptance' } catch { }
+        try { $health = Invoke-RestMethod 'http://127.0.0.1:3006/api/health' -TimeoutSec 2; $ready = $health.runMode -eq 'acceptance' -and (Test-Path -LiteralPath (Join-Path $data 'runtime/server.json')) } catch { }
         if ($ready) { break }; Start-Sleep -Seconds 1
     }
     Assert-Check $ready 'actual Windows supervisor starts acceptance bundle using ZIP path with spaces'

@@ -410,7 +410,7 @@ export function onSpeaking(l: (busy: boolean) => void) {
 const live = new Set<SpeechSynthesisUtterance>(); // keeps utterances alive until they end (iOS drops callbacks otherwise)
 const browserIo: SpeechIo = {
   speak(u) {
-    if (!browserSpeechAllowed()) return;
+    if (!browserSpeechAllowed()) { u.onDone(); return; }
     const synth = window.speechSynthesis;
     const ut = new SpeechSynthesisUtterance(u.text);
     ut.lang = u.lang === 'ja' ? 'ja-JP' : 'zh-TW';
@@ -466,7 +466,7 @@ const cloudIo = createCloudIo({
 
 /** the engine the queue hands each sentence to */
 const dispatchIo: SpeechIo = {
-  speak: (u) => cloudIo.speak(u),
+  speak: (u) => { if (!browserSpeechAllowed()) { u.onDone(); return; } cloudIo.speak(u); },
   cancel: () => { browserIo.cancel(); cloudIo.cancel(); },
 };
 

@@ -105,7 +105,11 @@ test('acceptance bundle ignores poisoned credentials and forbids HTTP/engine/cre
   const formal = await mkdtemp(join(tmpdir(), 'mugi-formal-sentinel-'));
   const owner = randomUUID().replaceAll('-', '');
   const listenPort = await port();
-  await writeFile(join(formal, 'credentials.json'), '{"fake":"never-read"}');
+  const fakeLogin = JSON.stringify({ v: 1, hostId: 'acceptance-sentinel', account: {
+    client_id: 'fake-client', subject: 'fake-user', email: 'fake@example.invalid', name: 'Fake',
+    access_token: 'fake-access', refresh_token: 'fake-refresh', id_token: 'fake-id', scopes: ['openid'], expiresAt: 0,
+  } });
+  await writeFile(join(formal, 'credentials.json'), fakeLogin);
   const guardPath = join(root, 'deny-network.cjs');
   const violation = join(root, 'violation.txt');
   await writeFile(guardPath, `
@@ -148,7 +152,7 @@ test('acceptance bundle ignores poisoned credentials and forbids HTTP/engine/cre
     await assert.rejects(() => import('node:fs/promises').then(fs => fs.stat(violation)), { code: 'ENOENT' });
     await writeFile(join(data, `runtime/node-stop-${owner}.request`), '');
     assert.equal(await boundedExit(exited), 0);
-    assert.equal(await (await import('node:fs/promises')).readFile(join(formal, 'credentials.json'), 'utf8'), '{"fake":"never-read"}');
+    assert.equal(await (await import('node:fs/promises')).readFile(join(formal, 'credentials.json'), 'utf8'), fakeLogin);
   } finally {
     if (child.exitCode === null) child.kill(); await boundedExit(exited);
     for (const dir of [root, data, formal]) await rm(dir, { recursive: true, force: true });

@@ -27,7 +27,12 @@ function launch(root, listenPort, owner, extra = {}) {
   const child = spawn(process.execPath, [bundle, `--mugi-owner=${owner}`], {
     cwd: root,
     env: { ...process.env, MUGI_DATA_DIR: join(root, 'account'), MUGI_PORT: String(listenPort), MUGI_ALLOWED_HOSTS: '', MUGI_RUN_MODE: 'normal', ...extra },
-    stdio: ['ignore', 'ignore', 'ignore'],
+    stdio: ['ignore', 'ignore', 'pipe'],
+  });
+  let diagnostic = '';
+  child.stderr.on('data', value => { diagnostic = (diagnostic + value).slice(-6000); });
+  child.once('exit', code => {
+    if (code !== 0 && extra.MUGI_RUN_MODE === 'acceptance') console.error('::error title=Acceptance bundle startup::' + diagnostic.replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A'));
   });
   const exited = new Promise((resolve, reject) => { child.once('exit', code => resolve(code)); child.once('error', reject); });
   return { child, exited };
@@ -123,7 +128,7 @@ test('acceptance bundle ignores poisoned credentials and forbids HTTP/engine/cre
     MUGI_RUN_MODE: 'acceptance', MUGI_ACCEPTANCE_ROOT: data,
     MUGI_DATA_DIR: formal, VOICEVOX_DIR: formal, MUGI_DAILY_USD: '0',
     ANTHROPIC_API_KEY: 'fake-anthropic', GOOGLE_TTS_API_KEY: 'fake-google', AZURE_SPEECH_KEY: 'fake-azure',
-    NODE_OPTIONS: `--require="${guardPath}"`,
+    NODE_OPTIONS: `--require=${JSON.stringify(guardPath)}`,
   });
   try {
     const base = `http://127.0.0.1:${listenPort}`;

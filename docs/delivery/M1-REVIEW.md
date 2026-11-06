@@ -47,3 +47,10 @@ GitHub GraphQL API 回覆 Forbidden；可透過公開 PR/Actions 頁面確認 Dr
 4. 明確授權後才進行真實 AI/OAuth/VOICEVOX，最後至少過夜運行。監測記憶體、磁碟及日誌；目前限制日誌檔數，單一長期執行的日誌大小仍須監測。強制停止/斷電仍可能中斷在途對話與最近未寫入資料。
 
 本次不部署、不修改私人主機或正式資料，不進入 M3；完成後等待審核。
+
+### 已觀察到的 GitHub CI 證據
+
+程式修正版本 `e4578c2` 的 PR CI 已成功：
+https://github.com/hansonfan77-oss/japanese-tutor-mugi/actions/runs/42304320207
+
+Ubuntu/Windows 兩個 job 成功，Windows 包含 PowerShell 5.1 與 7 執行相同 runtime mock/parser suite。因此已具備 Windows runner 的跨版本邏輯與語法證據；仍沒有執行私人主機上的真實 supervisor/CIM/ACL/工作排程故障注入。Actions v4 的 Node 20 runtime 升級提醒與 ubuntu-latest 映像遷移是非阻塞 notice/warning。文件後續提交的最新狀態應在 PR Checks 查看，不把舊版成功當作未執行提交的結果。

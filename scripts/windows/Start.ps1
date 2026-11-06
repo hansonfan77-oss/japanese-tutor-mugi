@@ -9,7 +9,7 @@ $layout = Resolve-MugiLayout $root $Mode $AcceptanceRoot
 $directory = $layout.Runtime
 New-Item -ItemType Directory -Force $directory | Out-Null
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-& icacls.exe $directory /inheritance:r /grant:r "${sid}:(OI)(CI)F" | Out-Null
+& icacls.exe $directory /inheritance:r /grant:r "*${sid}:(OI)(CI)F" | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Cannot restrict runtime directory permissions.' }
 $lock = Open-MugiLock $directory
 $owner = [guid]::NewGuid().ToString('N')

@@ -8,6 +8,8 @@ $checkout = Join-Path $testRoot 'Acceptance checkout'
 $data = Join-Path $testRoot 'Acceptance data'
 $priorLocal = $env:LOCALAPPDATA
 $priorPath = $env:PATH
+$priorMode = $env:MUGI_RUN_MODE
+$priorAcceptance = $env:MUGI_ACCEPTANCE_ROOT
 $priorLocation = Get-Location
 $script:checks = 0
 $supervisor = $null
@@ -26,6 +28,9 @@ try {
     Assert-Check ($tools.Node -eq (Join-Path $nodeHome 'node.exe')) 'explicit node path selected'
     Assert-Rejected { Resolve-MugiNode '' } 'missing NodeHome does not use system Node'
     Assert-Rejected { Resolve-MugiNode $checkout } 'incomplete ZIP rejected'
+    $env:LOCALAPPDATA = Join-Path $testRoot 'LocalAppData'
+    $layout = Resolve-MugiLayout $checkout 'Acceptance' $data
+    $env:MUGI_RUN_MODE = 'acceptance'; $env:MUGI_ACCEPTANCE_ROOT = $data
     Set-Location $checkout
     # npm run invokes a child by name. Its node and npm_cli must still come from our ZIP.
     $package = @{ scripts = @{ verify = 'node -e "require(''fs'').writeFileSync(''selected.json'',JSON.stringify({node:process.execPath,npm:process.env.npm_execpath}))"' } }
@@ -35,8 +40,6 @@ try {
     Assert-Check ($selected.node -eq $tools.Node) 'npm child uses selected Node despite spaces'
     Assert-Check ($selected.npm -eq $tools.NpmCli) 'npm CLI belongs to selected ZIP'
     Assert-Check ($env:PATH -eq $priorPath) 'process PATH restored after npm'
-    $env:LOCALAPPDATA = Join-Path $testRoot 'LocalAppData'
-    $layout = Resolve-MugiLayout $checkout 'Acceptance' $data
     Assert-Check ($layout.Port -eq 3006 -and $layout.Runtime -eq (Join-Path $data 'runtime')) 'acceptance port and runtime isolated'
     Assert-Check ($layout.Data -ne (Join-Path $env:LOCALAPPDATA 'MugiTutor')) 'OAuth data does not use normal account'
     Assert-Rejected { Resolve-MugiLayout $checkout 'Normal' '' } 'acceptance checkout cannot silently become normal'
@@ -90,5 +93,6 @@ try {
     if (Test-Path -LiteralPath $junction) { [System.IO.Directory]::Delete($junction) }
     Set-Location $priorLocation
     $env:LOCALAPPDATA = $priorLocal; $env:PATH = $priorPath
+    $env:MUGI_RUN_MODE = $priorMode; $env:MUGI_ACCEPTANCE_ROOT = $priorAcceptance
     Remove-Item $testRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

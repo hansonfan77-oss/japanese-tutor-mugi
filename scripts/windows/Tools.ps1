@@ -21,7 +21,9 @@ function Invoke-MugiNpm($Toolchain, [string[]]$NpmArguments) {
             $npmState = Join-Path $env:MUGI_ACCEPTANCE_ROOT 'state'
             $emptyConfig = Join-Path $npmState 'npm-empty.conf'
             if (!(Test-Path -LiteralPath $emptyConfig)) { New-Item -ItemType File $emptyConfig | Out-Null }
-            $options = @('--userconfig', $emptyConfig, '--globalconfig', $emptyConfig, '--cache', (Join-Path $npmState 'npm-cache'), '--registry', 'https://registry.npmjs.org')
+            $globalConfig = Join-Path $npmState 'npm-global-empty.conf'
+            if (!(Test-Path -LiteralPath $globalConfig)) { New-Item -ItemType File $globalConfig | Out-Null }
+            $options = @('--userconfig', $emptyConfig, '--globalconfig', $globalConfig, '--cache', (Join-Path $npmState 'npm-cache'), '--registry', 'https://registry.npmjs.org')
         }
         & $Toolchain.Node $Toolchain.NpmCli @options @NpmArguments
         if ($LASTEXITCODE -ne 0) { throw "Selected Node/npm failed (exit $LASTEXITCODE)." }

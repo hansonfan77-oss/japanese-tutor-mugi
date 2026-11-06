@@ -16,7 +16,7 @@
 
 ## 開發環境證據
 
-- 完整 Vitest：95 檔、**1435 通過、1 跳過、0 失敗**；跳過既有未啟動真實 VOICEVOX 引擎的測試。
+- 完整 Vitest：95 檔、**1435 通過、1 跳過、0 失敗**；跳過未明確 opt-in 的真實 VOICEVOX 引擎整合測試。
 - 完整 TypeScript + 前端 + 正式 Node bundle Build 成功。
 - 正式 bundle smoke：**3 通過**，包含 normal 健康/公開檔/拒絕私有路徑、埠衝突不殺佔埠者、合作式停止，以及 acceptance 假金鑰/假登入路徑/fallback/未來 API 拒絕。
 - acceptance smoke 注入 HTTP(S)/fetch/engine 的禁止探針與正式資料 read/write 哨兵，沒有觸發；假正式資料保持不變。不是只測「沒有金鑰」。
@@ -33,3 +33,15 @@ CI 新增在 Windows PowerShell 5.1、PowerShell 7 各執行 `Test-Tools.ps1`：
 ## 最短下一步
 
 依 [逐步指南](../acceptance-guide.md) 在小 PC 另 clone 新副本，核對最新 PR SHA；指定完整 Node 24 ZIP，使用新的 AcceptanceRoot 執行 Install/Start。確認 3006 的 runtime=acceptance、外部與瀏覽器語音 false、聊天 POST=423；以新瀏覽器設定檔查看人物/話題，完成後 Stop。先不要接 Tailscale、填金鑰或切 Normal。
+
+## 本輪 CI 發現並修復的實際問題
+
+- Windows 真實啟動測試發現原 Start.ps1 的 icacls 數字 SID 缺少 `*` 前綴，導致 runtime ACL 無法建立。已使用正式數字 SID 語法修復。
+- 多個 Node 同時存在的 Windows runner，測試用的 Get-Command 曾回傳多個候選；改為測試明確選第一個來源，再複製到含空白的獨立目錄。正式 Install/Start 從不以此方式猜測 Node，始終要求 NodeHome。
+- Windows preload 路徑在 NODE_OPTIONS 中需要正確 escaping；bundle 禁止網路探針已修正 Windows quoting，原來的安全斷言保留。
+- 既有 VOICEVOX 單元測試曾在 cache/usage 非同步寫入尚未完成就刪除目錄，偶發 ENOTEMPTY；現先 `settle()`/`flush()`，再刪除，沒有重試掩蓋或停用測試。真實引擎整合改為額外明確 opt-in，預設連探測也不執行；Mocks 及全部正常斷言保留。
+
+已觀察到 `e415e11` 的 Windows job 完整成功（該次 Ubuntu 的 teardown 競態已在後續修復）：
+https://github.com/hansonfan77-oss/japanese-tutor-mugi/actions/runs/42312086618/job/128215750058
+
+該 Windows job 包含完整單元測試、Build、3 項 bundle smoke、PS 5.1/7 各 26 項 runtime assertions 及各 20 項 ZIP/版圖/真實 supervisor 檢查。這是 Windows runner 的真實程序/CIM/ACL 證據，仍不等於使用者私人小 PC、Tailscale 或手機已驗收。

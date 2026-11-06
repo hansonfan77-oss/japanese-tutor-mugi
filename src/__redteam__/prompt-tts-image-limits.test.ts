@@ -80,7 +80,7 @@ describe('路由（providers、openaiModel）與模型', () => {
     [{ providers: [] }, '空陣列'],
     [{ providers: 'anthropic' }, '字串'],
     [{ providers: ['__proto__'] }, '原型鍵'],
-  ])('providers 不合格（%s）→ RoutingError', (v) => {
+  ])('providers 不合格（%s）→ RoutingError', (v, _label) => {
     expect(() => parseRouting(v as never)).toThrow(RoutingError);
   });
 

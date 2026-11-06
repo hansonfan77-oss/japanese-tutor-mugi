@@ -1,7 +1,7 @@
 // 速查 (quick Japanese lookup): the player asks how to say something, or about a word or grammar point. Not the character
 // chat: nothing here touches her chat history. Pure parsing and history helpers (no DOM at import time) so the dev server
 // (server/claudeChat.ts) and the phone share them. The history lives in localStorage, per device; every access is guarded.
-import { apiFetch } from './apiFetch';
+import { apiFetch } from './apiFetch.ts';
 import type { AiServices } from './claudeProtocol.ts';
 
 export const LOOKUP_MAX_CHARS = 200;

@@ -1,0 +1,56 @@
+name: Mugi validation
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm test -- --maxWorkers=2
+        env:
+          MUGI_DATA_DIR: ${{ runner.temp }}/mugi-test-account
+      - run: npm run build
+      - run: node --test scripts/test-production.mjs
+      - name: Runtime logic and parser on Windows PowerShell 5.1
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: '& ./scripts/windows/Test-Runtime.ps1'
+      - name: Runtime logic and parser on PowerShell 7
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '& ./scripts/windows/Test-Runtime.ps1'
+      - name: ZIP Node path with spaces and isolated layout (PowerShell 5.1)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          try { & ./scripts/windows/Test-Tools.ps1 }
+          catch {
+            $detail = $_.ToString().Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Windows ZIP acceptance test::$detail"
+            throw
+          }
+      - name: ZIP Node path with spaces and isolated layout (PowerShell 7)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          try { & ./scripts/windows/Test-Tools.ps1 }
+          catch {
+            $detail = $_.ToString().Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Windows ZIP acceptance test::$detail"
+            throw
+          }

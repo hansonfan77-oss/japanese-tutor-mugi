@@ -483,16 +483,21 @@ export function usagePlugin(): Plugin {
       root = cfg.root;
     },
     configureServer(server) {
-      const store = getUsageStore(root);
-      const speechCache = getTtsCache(root);
-      server.middlewares.use('/api/usage', guardApi((req, res) => {
-        try {
-          usageRoute(store, req, res, speechCache);
-        } catch (e) {
-          console.warn('[usage]', e instanceof Error ? e.message : e);
-          if (!res.headersSent) json(res, 500, { error: 'server', message: '伺服器錯誤' });
-        }
-      }, guardOptionsFrom(server)));
+      mountUsage(server.middlewares, root, guardOptionsFrom(server));
     },
   };
+}
+
+/** Shared route registration for development and the private production server. */
+export function mountUsage(middlewares: import("connect").Server, root: string, guard: import("./apiGuard.ts").GuardOptions) {
+  const store = getUsageStore(root);
+  const speechCache = getTtsCache(root);
+  middlewares.use('/api/usage', guardApi((req, res) => {
+    try {
+      usageRoute(store, req, res, speechCache);
+    } catch (e) {
+      console.warn('[usage]', e instanceof Error ? e.message : e);
+      if (!res.headersSent) json(res, 500, { error: 'server', message: '伺服器錯誤' });
+    }
+  }, guard));
 }

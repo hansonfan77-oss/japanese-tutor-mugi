@@ -1,9 +1,8 @@
 import react from '@vitejs/plugin-react'
-import { defineConfig } from 'vite'
-import { claudeChatPlugin } from './server/claudeChat.ts'
+import { defineConfig } from 'vitest/config'
+import { appRuntimePlugin } from './server/appRuntime.ts'
+import { readRunMode } from './server/runtimePolicy.ts'
 import { FS_DENY } from './server/fsDeny.ts'
-import { ttsPlugin } from './server/tts.ts'
-import { usagePlugin } from './server/usage.ts'
 
 // Dev server. By default it listens on 127.0.0.1 only: this PC can reach it, nothing else can.
 // MUGI_LAN=1 (set in the shell that starts the server, read here at startup) listens on all network interfaces, so a
@@ -19,8 +18,10 @@ const LAN = process.env.MUGI_LAN === '1';
 const host = LAN ? true : '127.0.0.1';
 const EXTRA_HOSTS = (process.env.MUGI_ALLOWED_HOSTS ?? '').split(',').map((h) => h.trim()).filter(Boolean);
 
-export default defineConfig({
-  plugins: [react(), claudeChatPlugin(), ttsPlugin(), usagePlugin()],
+export default defineConfig(({ mode }) => ({
+  plugins: [react(), ...(mode === 'test' ? [] : [appRuntimePlugin()])],
+  envDir: readRunMode() === 'acceptance' ? false : undefined,
+  test: { setupFiles: ['./src/testSetup.ts'] },
   server: {
     host,
     port: 3004,
@@ -42,4 +43,4 @@ export default defineConfig({
       },
     },
   },
-})
+}))

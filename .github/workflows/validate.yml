@@ -12,8 +12,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    env:
-      MUGI_DATA_DIR: ${{ runner.temp }}/mugi-test-account
     steps:
       - uses: actions/checkout@v4
         with:
@@ -24,6 +22,8 @@ jobs:
           cache: npm
       - run: npm ci --no-audit --no-fund
       - run: npm test -- --maxWorkers=2
+        env:
+          MUGI_DATA_DIR: ${{ runner.temp }}/mugi-test-account
       - run: npm run build
       - run: node --test scripts/test-production.mjs
       - name: Runtime logic and parser on Windows PowerShell 5.1

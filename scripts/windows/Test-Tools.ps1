@@ -67,7 +67,7 @@ try {
     $supervisor = Start-Process (Join-Path $PSHOME $shellName) -ArgumentList @('-NoProfile', '-File', ('"' + $startScript + '"'), '-NodeHome', ('"' + $nodeHome + '"'), '-AcceptanceRoot', ('"' + $data + '"')) -PassThru -RedirectStandardOutput (Join-Path $testRoot 'supervisor-out.txt') -RedirectStandardError (Join-Path $testRoot 'supervisor-err.txt')
     $ready = $false
     for ($i = 0; $i -lt 45; $i++) {
-        if ($supervisor.HasExited) { throw 'Fixture supervisor exited before readiness.' }
+        if ($supervisor.HasExited) { $detail = Get-Content (Join-Path $testRoot 'supervisor-err.txt') -Raw; throw "Fixture supervisor exited before readiness: $detail" }
         try { $health = Invoke-RestMethod 'http://127.0.0.1:3006/api/health' -TimeoutSec 2; $ready = $health.runMode -eq 'acceptance' } catch { }
         if ($ready) { break }; Start-Sleep -Seconds 1
     }

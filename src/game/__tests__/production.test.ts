@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createServer, request, type Server } from 'node:http';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -98,4 +98,12 @@ describe('private production server (no external AI requests)', () => {
     writeFileSync(join(root, '.env.local'), 'SECRET=must-not-leak');
   });
 
+});
+
+// These route tests do not test Windows DPAPI. Auth/credential suites cover it with their own fixtures.
+vi.mock('../../../server/openai/credentials.ts', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../server/openai/credentials.ts')>();
+  return { ...actual, defaultProtector: () => null,
+    openCredentialStore: () => ({ data: { v: 1, hostId: 'route-test-only', account: null }, save() {} }),
+  };
 });

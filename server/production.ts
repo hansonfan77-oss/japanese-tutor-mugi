@@ -72,10 +72,10 @@ export function productionApp(root: string, allowedHosts: string[] = [], options
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const root = process.cwd();
   await stat(resolve(root, 'dist/index.html'));
-  const port = Number(process.env.MUGI_PORT ?? 3004);
+  const policy = runtimePolicy(root);
+  const port = Number(process.env.MUGI_PORT ?? (policy.mode === 'acceptance' ? 3006 : 3004));
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid MUGI_PORT');
   const allowed = (process.env.MUGI_ALLOWED_HOSTS ?? '').split(',').map(h => h.trim()).filter(Boolean);
-  const policy = runtimePolicy(root);
   const server = createServer(productionApp(root, allowed));
   server.requestTimeout = 120_000;
   server.headersTimeout = 15_000;

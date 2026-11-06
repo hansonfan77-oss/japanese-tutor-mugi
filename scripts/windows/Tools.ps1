@@ -72,7 +72,9 @@ function Resolve-MugiLayout([string]$Root, [string]$Mode, [string]$AcceptanceRoo
     if (!(Test-Path -LiteralPath $ownerFile)) {
         if (!$Initialize) { throw 'No acceptance root marker. Refusing to stop an unknown directory.' }
         if (@(Get-ChildItem -LiteralPath $target -Force).Count) { throw 'AcceptanceRoot is not empty or marked; choose a new directory. Nothing was copied or overwritten.' }
-        @{ schema = 1; checkout = $Root } | ConvertTo-Json -Compress | Set-Content -LiteralPath $ownerFile -Encoding UTF8
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes((@{ schema = 1; checkout = $Root } | ConvertTo-Json -Compress))
+        $claim = [System.IO.File]::Open($ownerFile, 'CreateNew', 'Write', 'None')
+        try { $claim.Write($bytes, 0, $bytes.Length) } finally { $claim.Dispose() }
     }
     $owner = Get-Content -LiteralPath $ownerFile -Raw | ConvertFrom-Json
     if ($owner.schema -ne 1 -or $owner.checkout -ne $Root) { throw 'AcceptanceRoot belongs to another checkout.' }

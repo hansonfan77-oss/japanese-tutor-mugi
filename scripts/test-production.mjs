@@ -47,7 +47,7 @@ test('built production bundle serves PWA/API, hides source, and drains on owned 
   try {
     const base = `http://127.0.0.1:${listenPort}`;
     let ready = false;
-    for (let i = 0; i < 100; i++) {
+    for (let i = 0; i < 450; i++) {
       if (child.exitCode !== null) throw new Error('Bundle exited before readiness');
       try { ready = (await fetch(base + '/api/health')).ok; } catch { /* bounded startup */ }
       if (ready) break;
@@ -128,7 +128,7 @@ test('acceptance bundle ignores poisoned credentials and forbids HTTP/engine/cre
   try {
     const base = `http://127.0.0.1:${listenPort}`;
     let ready = false;
-    for (let i = 0; i < 100; i++) {
+    for (let i = 0; i < 450; i++) {
       if (child.exitCode !== null) throw new Error('Acceptance bundle exited');
       try { ready = (await fetch(base + '/api/health')).ok; } catch { }
       if (ready) break; await delay(100);

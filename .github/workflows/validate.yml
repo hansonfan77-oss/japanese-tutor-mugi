@@ -1,7 +1,7 @@
 name: Mugi validation
 on:
   push:
-    branches: [main, feat/mugi-private-pwa-animation]
+    branches: [main]
   pull_request:
 permissions:
   contents: read

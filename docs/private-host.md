@@ -25,10 +25,10 @@ Install 使用 npm ci 與完整 build。Start 只執行 `node dist-server/produc
 伺服器僅監聽 127.0.0.1:3004，保留既有 API guards、SSE、漢字讀音、語音、糾錯、自訂角色；Vite 僅做建置和既有 loadEnv 工具，不建立 Vite 開發伺服器。
 `npm run dev` 是獨立開發流程；勿與正式伺服器搶占相同埠。
 
-Start 每 10 秒檢查 `/api/health`，連續 3 次失敗停止子進程；退出後等 10 秒重啟，最多累計 5 次，避免錯誤迴圈。健康檢查只代表 HTTP 服務健康，**不代表 AI、VOICEVOX 或手機功能可用**。
+Start 每 10 秒檢查 `/api/health`，連續 3 次失敗停止子進程；退出後等 10 秒重啟，連續 5 次短期失敗才停止；連續健康 5 分鐘的執行會重置舊失敗記錄。健康檢查只代表 HTTP 服務健康，**不代表 AI、VOICEVOX 或手機功能可用**。
 日誌在忽略的 `.runtime`，以帳號 SID 限制 ACL，最多保留 5 組 stdout/stderr；不記錄請求或標頭。底層既有程式仍可能輸出供應商錯誤，分享前須去識別。
-PID 檔已有時拒絕重複啟動；停止腳本先驗證完整指令路徑與程式名稱，身份不明時拒絕操作，不依 image name 全域關閉 Node。
-異常關機留下 PID 檔：確認其中進程已不存在且沒有 Mugi 服務後才手動移除；不得盲目刪除仍在使用的 PID 檔。
+以排他鎖拒絕重複啟動；停止腳本驗證 PID、建立時間、執行檔及完整指令列，身份不明時拒絕操作，不依 image name 全域關閉 Node。
+異常關機後鎖會由 OS 釋放；新版本可恢復已核實的孤兒程序。舊 PID 檔、損壞記錄或查詢權限問題依本文件末的複審說明處理，不盲目刪除。
 
 可在「工作排程器」建立 **目前使用者** 的登入觸發工作：程式 `powershell.exe`，引數 `-NoProfile -File "完整路徑\scripts\windows\Start.ps1" -AllowedHost "精確的.ts.net主機名"`，起始位置為 repo；不需最高權限，設定「已執行則不啟動新執行個體」。建議先人工測試重啟與停止，再啟用開機維運。登出/無登入時執行需另驗證帳號、檔案權限與 Tailscale 服務；此處不代替安裝 Windows Service。
 

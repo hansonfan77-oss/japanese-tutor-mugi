@@ -673,25 +673,30 @@ export function ttsPlugin(): Plugin {
       mode = cfg.mode;
     },
     configureServer(server) {
-      // the disk cache is scanned and trimmed to its cap once, here at startup
-      getTtsCache(root);
-      const guard = guardOptionsFrom(server);
-      const sameOrigin = (h: Parameters<typeof sameOriginRequest>[0]) => sameOriginRequest(h, guard);
-      // VOICEVOX on/off (server/voicevoxProcess.ts): the same-origin guard of the cache clear route
-      const vvRoute = voicevoxRoute(createVoicevoxProcess(defaultVoicevoxDeps(sameOrigin)), { sameOrigin });
-      server.middlewares.use('/api/voicevox', guardApi((req, res) => {
-        vvRoute(req, res).catch((e: unknown) => {
-          console.warn('[voicevox]', e instanceof Error ? e.message : e);
-          if (!res.headersSent) json(res, 500, { error: 'server', message: '伺服器錯誤' });
-        });
-      }, guard));
-      server.middlewares.use('/api/tts', guardApi((req, res) => {
-        handleTts(req, res, root, mode, guard).catch((e: unknown) => {
-          console.warn('[tts]', e instanceof Error ? e.message : e);
-          if (!res.headersSent) json(res, 500, { error: 'server', message: '伺服器錯誤' });
-          else if (!res.writableEnded) res.end();
-        });
-      }, guard));
+      mountTts(server.middlewares, root, mode, guardOptionsFrom(server));
     },
   };
+}
+
+/** Shared route registration for development and the private production server. */
+export function mountTts(middlewares: import("connect").Server, root: string, mode: string, guard: import("./apiGuard.ts").GuardOptions) {
+  // the disk cache is scanned and trimmed to its cap once, here at startup
+  getTtsCache(root);
+
+  const sameOrigin = (h: Parameters<typeof sameOriginRequest>[0]) => sameOriginRequest(h, guard);
+  // VOICEVOX on/off (server/voicevoxProcess.ts): the same-origin guard of the cache clear route
+  const vvRoute = voicevoxRoute(createVoicevoxProcess(defaultVoicevoxDeps(sameOrigin)), { sameOrigin });
+  middlewares.use('/api/voicevox', guardApi((req, res) => {
+    vvRoute(req, res).catch((e: unknown) => {
+      console.warn('[voicevox]', e instanceof Error ? e.message : e);
+      if (!res.headersSent) json(res, 500, { error: 'server', message: '伺服器錯誤' });
+    });
+  }, guard));
+  middlewares.use('/api/tts', guardApi((req, res) => {
+    handleTts(req, res, root, mode, guard).catch((e: unknown) => {
+      console.warn('[tts]', e instanceof Error ? e.message : e);
+      if (!res.headersSent) json(res, 500, { error: 'server', message: '伺服器錯誤' });
+      else if (!res.writableEnded) res.end();
+    });
+  }, guard));
 }

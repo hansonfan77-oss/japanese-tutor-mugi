@@ -841,66 +841,7 @@ export function claudeChatPlugin(): Plugin {
       mode = cfg.mode;
     },
     configureServer(server) {
-      // load the reading analyser now, not on the first reply (its dictionary takes about a second)
-      loadAnalyzer().catch((e: unknown) => console.warn('[readings]', e instanceof Error ? e.message : e));
-      // the ChatGPT sign-in is read now too (its key unlock may take a second on Windows); a failure is logged there
-      chatGptService();
-      const guard = guardOptionsFrom(server);
-      // the ChatGPT sign-in: /api/openai (guarded like the other /api routes; sign-in and sign-out local only) and the OAuth callback (local only, see routes.ts)
-      server.middlewares.use('/api/openai', guardApi((req, res) => {
-        const chatgpt = chatGptService();
-        if (!chatgpt) return json(res, 500, { error: 'server', message: '登入資料無法讀取，請看終端機的說明。' });
-        handleOpenAiApi(req, res, chatgpt).then((handled) => {
-          if (!handled) json(res, 404, { error: 'not_found', message: '沒有這個 API' });
-        }).catch((e: unknown) => {
-          console.warn('[openai]', e instanceof Error ? e.message : e);
-          if (!res.headersSent) json(res, 500, { error: 'server', message: '伺服器錯誤' });
-          else if (!res.writableEnded) res.end();
-        });
-      }, guard));
-      // the settings from the sheet: the keys in .env.local are written from this PC only, the daily budget from a trusted request (settingsRoutes.ts)
-      server.middlewares.use('/api/settings', guardApi((req, res) => {
-        handleSettingsApi(req, res, {
-          envPath: join(PROJECT_ROOT, '.env.local'),
-          guard,
-          readUsd: () => readLimits(root, mode).dailyUsd,
-          spentTodayUsd: () => getUsageStore(root).dailyCostUsd(),
-        }).then((handled) => {
-          if (!handled) json(res, 404, { error: 'not_found', message: '沒有這個 API' });
-        }).catch((e: unknown) => {
-          console.warn('[settings]', e instanceof Error ? e.message : e);
-          if (!res.headersSent) json(res, 500, { error: 'server', message: '伺服器錯誤' });
-          else if (!res.writableEnded) res.end();
-        });
-      }, guard));
-      server.middlewares.use('/auth/callback', (req, res) => {
-        const chatgpt = chatGptService();
-        if (!chatgpt) {
-          res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
-          res.end('登入資料無法讀取，請看終端機的說明。');
-          return;
-        }
-        handleAuthCallback(req, res, chatgpt).catch((e: unknown) => {
-          console.warn('[openai]', e instanceof Error ? e.message : e);
-          if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
-          if (!res.writableEnded) res.end('登入失敗，請回到首頁重試。');
-        });
-      });
-      server.middlewares.use('/api/lookup', guardApi((req, res) => {
-        handleLookup(req, res, root, mode).catch((e: unknown) => {
-          console.warn('[lookup]', e instanceof Error ? e.message : e);
-          if (!res.headersSent) json(res, 500, { error: 'server', message: '伺服器錯誤' });
-          else if (!res.writableEnded) res.end();
-        });
-      }, guard));
-      server.middlewares.use('/api/chat', guardApi((req, res) => {
-        handleChat(req, res, root, mode).catch((e: unknown) => {
-          // an unexpected bug must not take the dev server down; report it as a plain error
-          console.warn('[claude-chat]', e instanceof Error ? e.message : e);
-          if (!res.headersSent) json(res, 500, { error: 'server', message: '伺服器錯誤' });
-          else if (!res.writableEnded) res.end();
-        });
-      }, guard));
+      mountChat(server.middlewares, root, mode, guardOptionsFrom(server));
     },
   };
 }
@@ -1057,4 +998,68 @@ async function handleLookup(req: IncomingMessage, res: ServerResponse, root: str
   } finally {
     releaseLookupConcurrency();
   }
+}
+
+/** Shared route registration for development and the private production server. */
+export function mountChat(middlewares: import("connect").Server, root: string, mode: string, guard: import("./apiGuard.ts").GuardOptions) {
+  // load the reading analyser now, not on the first reply (its dictionary takes about a second)
+  loadAnalyzer().catch((e: unknown) => console.warn('[readings]', e instanceof Error ? e.message : e));
+  // the ChatGPT sign-in is read now too (its key unlock may take a second on Windows); a failure is logged there
+  chatGptService();
+
+  // the ChatGPT sign-in: /api/openai (guarded like the other /api routes; sign-in and sign-out local only) and the OAuth callback (local only, see routes.ts)
+  middlewares.use('/api/openai', guardApi((req, res) => {
+    const chatgpt = chatGptService();
+    if (!chatgpt) return json(res, 500, { error: 'server', message: '登入資料無法讀取，請看終端機的說明。' });
+    handleOpenAiApi(req, res, chatgpt).then((handled) => {
+      if (!handled) json(res, 404, { error: 'not_found', message: '沒有這個 API' });
+    }).catch((e: unknown) => {
+      console.warn('[openai]', e instanceof Error ? e.message : e);
+      if (!res.headersSent) json(res, 500, { error: 'server', message: '伺服器錯誤' });
+      else if (!res.writableEnded) res.end();
+    });
+  }, guard));
+  // the settings from the sheet: the keys in .env.local are written from this PC only, the daily budget from a trusted request (settingsRoutes.ts)
+  middlewares.use('/api/settings', guardApi((req, res) => {
+    handleSettingsApi(req, res, {
+      envPath: join(PROJECT_ROOT, '.env.local'),
+      guard,
+      readUsd: () => readLimits(root, mode).dailyUsd,
+      spentTodayUsd: () => getUsageStore(root).dailyCostUsd(),
+    }).then((handled) => {
+      if (!handled) json(res, 404, { error: 'not_found', message: '沒有這個 API' });
+    }).catch((e: unknown) => {
+      console.warn('[settings]', e instanceof Error ? e.message : e);
+      if (!res.headersSent) json(res, 500, { error: 'server', message: '伺服器錯誤' });
+      else if (!res.writableEnded) res.end();
+    });
+  }, guard));
+  middlewares.use('/auth/callback', (req, res) => {
+    const chatgpt = chatGptService();
+    if (!chatgpt) {
+      res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('登入資料無法讀取，請看終端機的說明。');
+      return;
+    }
+    handleAuthCallback(req, res, chatgpt).catch((e: unknown) => {
+      console.warn('[openai]', e instanceof Error ? e.message : e);
+      if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+      if (!res.writableEnded) res.end('登入失敗，請回到首頁重試。');
+    });
+  });
+  middlewares.use('/api/lookup', guardApi((req, res) => {
+    handleLookup(req, res, root, mode).catch((e: unknown) => {
+      console.warn('[lookup]', e instanceof Error ? e.message : e);
+      if (!res.headersSent) json(res, 500, { error: 'server', message: '伺服器錯誤' });
+      else if (!res.writableEnded) res.end();
+    });
+  }, guard));
+  middlewares.use('/api/chat', guardApi((req, res) => {
+    handleChat(req, res, root, mode).catch((e: unknown) => {
+      // an unexpected bug must not take the dev server down; report it as a plain error
+      console.warn('[claude-chat]', e instanceof Error ? e.message : e);
+      if (!res.headersSent) json(res, 500, { error: 'server', message: '伺服器錯誤' });
+      else if (!res.writableEnded) res.end();
+    });
+  }, guard));
 }

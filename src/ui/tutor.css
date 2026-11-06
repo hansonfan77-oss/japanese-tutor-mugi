@@ -252,3 +252,22 @@
    pinches and the wheel pass through the empty stage to them; its own children (the bubble, an unanchored figure) take them back */
 .tutor-stage { pointer-events: none; }
 .tutor-stage > * { pointer-events: auto; }
+
+/* Small phones / landscape: preserve keyboard scrolling and accessible touch targets. */
+.tutor button, .tutor select { touch-action: manipulation; }
+.tutor button:focus-visible, .tutor input:focus-visible, .tutor select:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 3px;
+}
+@media (max-width: 380px) {
+  .as-row { flex-wrap: wrap; gap: 6px; }
+  .as-seg { flex-wrap: wrap; max-width: 100%; }
+  .as-seg button { min-height: 44px; }
+  .tutor .as-settings .as-settings-body { max-height: 65dvh; }
+}
+@media (max-height: 500px) and (orientation: landscape) {
+  .tutor .as-settings .as-settings-body { max-height: 55dvh; }
+  .tutor-bubble { max-width: min(75vw, 720px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tutor *, .sheet-dark * { scroll-behavior: auto !important; animation-duration: 0.01ms !important; }
+}

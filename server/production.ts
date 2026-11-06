@@ -1,7 +1,7 @@
 /** Private host: built static frontend + the same guarded APIs used in development. */
 import { createServer } from 'node:http';
 import { readFile, realpath, stat } from 'node:fs/promises';
-import { resolve, relative, extname, sep } from 'node:path';
+import { resolve, relative, extname, sep, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import connect from 'connect';
 import { mountChat } from './claudeChat.ts';
@@ -44,7 +44,7 @@ export function productionApp(root: string, allowedHosts: string[] = []) {
       try { file = await realpath(resolve(dist, '.' + (pathname === '/' ? '/index.html' : pathname))); }
       catch { res.writeHead(404); res.end(); return; }
       const rel = relative(dist, file);
-      if (rel.startsWith('..' + sep) || rel === '..' || !(await stat(file)).isFile()) { res.writeHead(404); res.end(); return; }
+      if (isAbsolute(rel) || rel.startsWith('..' + sep) || rel === '..' || !(await stat(file)).isFile()) { res.writeHead(404); res.end(); return; }
       res.setHeader('Content-Type', mime[extname(file)] ?? 'application/octet-stream');
       if (rel.startsWith('assets' + sep)) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
       const data = await readFile(file);

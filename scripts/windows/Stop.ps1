@@ -2,7 +2,7 @@ $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path "$PSScriptRoot/../..").Path
 Set-Location $root
 # Verify process command lines and executable identity before using saved PIDs (PID reuse protection).
-foreach ($entry in @(@('host.pid', (Join-Path $root 'scripts/windows/Start.ps1'), 'powershell|pwsh'), @('server.pid', (Join-Path $root 'dist-server/production.js'), '^node.exe$'))) {
+foreach ($entry in @(@('host.pid', (Join-Path $root 'scripts/windows/Start.ps1'), 'powershell|pwsh'), @('server.pid', (Join-Path $root 'dist-server/production.js'), '^node\.exe$'))) {
   $file = Join-Path '.runtime' $entry[0]
   if (!(Test-Path $file)) { continue }
   $processId = [int](Get-Content $file -Raw)

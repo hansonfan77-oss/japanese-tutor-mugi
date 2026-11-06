@@ -5,9 +5,8 @@ import { readFile, realpath, stat } from 'node:fs/promises';
 import { resolve, relative, extname, sep, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import connect from 'connect';
-import { mountChat } from './claudeChat.ts';
-import { mountTts } from './tts.ts';
-import { mountUsage } from './usage.ts';
+import { mountApplicationApis } from './appRuntime.ts';
+import { runtimePolicy, type RunMode } from './runtimePolicy.ts';
 import { guardApi, type GuardOptions } from './apiGuard.ts';
 
 const mime: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.mp3': 'audio/mpeg', '.ico': 'image/x-icon', '.json': 'application/json' };
@@ -23,10 +22,11 @@ function publicPath(path: string): boolean {
   return /^\/audio\/[a-zA-Z0-9_/-]+\.(?:mp3|wav|ogg)$/.test(path);
 }
 
-export function productionApp(root: string, allowedHosts: string[] = []) {
+export function productionApp(root: string, allowedHosts: string[] = [], options: { mode?: RunMode; acceptanceRoot?: string } = {}) {
   if (allowedHosts.some(h => !/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(h))) {
     throw new Error('Production allowed hosts must be exact DNS names, without wildcards, suffix rules or ports');
   }
+  const policy = runtimePolicy(root, options);
   const app = connect();
   const guard: GuardOptions = { allowedHosts, lan: false };
   // Also applies to SSE, OAuth callbacks, errors and health responses.
@@ -39,14 +39,7 @@ export function productionApp(root: string, allowedHosts: string[] = []) {
     if (req.url?.split('?')[0] === '/auth/callback') return next();
     return guardApi((_req, _res) => next(), guard)(req, res);
   });
-  app.use('/api/health', (req, res) => {
-    if (req.url !== '/' || req.method !== 'GET') { res.writeHead(404); res.end(); return; }
-    res.setHeader('Content-Type', 'application/json');
-    res.end(JSON.stringify({ ok: true, service: 'mugi', mode: 'production' }));
-  });
-  mountChat(app, root, 'production', guard);
-  mountTts(app, root, 'production', guard);
-  mountUsage(app, root, guard);
+  mountApplicationApis(app, root, 'production', guard, policy);
   app.use((req, res, next) => {
     void (async () => {
       if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); res.end(); return; }
@@ -82,6 +75,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const port = Number(process.env.MUGI_PORT ?? 3004);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid MUGI_PORT');
   const allowed = (process.env.MUGI_ALLOWED_HOSTS ?? '').split(',').map(h => h.trim()).filter(Boolean);
+  const policy = runtimePolicy(root);
   const server = createServer(productionApp(root, allowed));
   server.requestTimeout = 120_000;
   server.headersTimeout = 15_000;
@@ -100,7 +94,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   if (ownerArg) {
     const owner = ownerArg.slice('--mugi-owner='.length);
     if (!/^[a-f0-9]{32}$/.test(owner)) throw new Error('Invalid supervisor owner');
-    const stopFile = resolve(root, '.runtime', `node-stop-${owner}.request`);
+    const stopFile = resolve(policy.controlDir, `node-stop-${owner}.request`);
     stopTimer = setInterval(() => {
       if (existsSync(stopFile)) {
         try { unlinkSync(stopFile); } catch { /* a concurrent stop request is harmless */ }

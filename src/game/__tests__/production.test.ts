@@ -24,7 +24,7 @@ beforeAll(async () => {
   writeFileSync(join(root, 'dist/audio/example.mp3'), 'public-audio');
   // Directory junction needs no symlink privilege on Windows; realpath must still reject escape.
   symlinkSync(root, join(root, 'dist/escape'), process.platform === 'win32' ? 'junction' : 'dir');
-  server = createServer(productionApp(root, ['mugi.example.ts.net']));
+  server = createServer(productionApp(root, ['mugi.example.ts.net'], { mode: 'normal' }));
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const addr = server.address();
   if (!addr || typeof addr === 'string') throw new Error('No server');
@@ -47,7 +47,7 @@ describe('private production server (no external AI requests)', () => {
     expect(await (await fetch(base)).text()).toContain('Mugi built');
     const r = await fetch(base + '/api/health');
     expect(r.headers.get('cache-control')).toBe('no-store');
-    expect(await r.json()).toEqual({ ok: true, service: 'mugi', mode: 'production' });
+    expect(await r.json()).toEqual({ ok: true, service: 'mugi', mode: 'production', runMode: 'normal' });
     const usage = await fetch(base + '/api/usage');
     expect(usage.status).toBe(200);
     expect(usage.headers.get('cache-control')).toBe('no-store');

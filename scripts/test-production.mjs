@@ -23,10 +23,10 @@ async function fixture() {
   await mkdir(join(root, '.runtime'));
   return root;
 }
-function launch(root, listenPort, owner) {
+function launch(root, listenPort, owner, extra = {}) {
   const child = spawn(process.execPath, [bundle, `--mugi-owner=${owner}`], {
     cwd: root,
-    env: { ...process.env, MUGI_DATA_DIR: join(root, 'account'), MUGI_PORT: String(listenPort), MUGI_ALLOWED_HOSTS: '' },
+    env: { ...process.env, MUGI_DATA_DIR: join(root, 'account'), MUGI_PORT: String(listenPort), MUGI_ALLOWED_HOSTS: '', MUGI_RUN_MODE: 'normal', ...extra },
     stdio: ['ignore', 'ignore', 'ignore'],
   });
   const exited = new Promise((resolve, reject) => { child.once('exit', code => resolve(code)); child.once('error', reject); });
@@ -89,5 +89,63 @@ test('port collision exits the owned bundle without terminating the port holder'
     await boundedExit(exited);
     await new Promise(r => holder.close(r));
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+
+test('acceptance bundle ignores poisoned credentials and forbids HTTP/engine/credential access', async () => {
+  const root = await fixture();
+  await rm(join(root, '.runtime'), { recursive: true });
+  const data = await mkdtemp(join(tmpdir(), 'mugi-accept data-'));
+  const formal = await mkdtemp(join(tmpdir(), 'mugi-formal-sentinel-'));
+  const owner = randomUUID().replaceAll('-', '');
+  const listenPort = await port();
+  await writeFile(join(formal, 'credentials.json'), '{"fake":"never-read"}');
+  const guardPath = join(root, 'deny-network.cjs');
+  const violation = join(root, 'violation.txt');
+  await writeFile(guardPath, `
+    const fs = require('node:fs');
+    const mark = (label) => { fs.appendFileSync(${JSON.stringify(violation)}, label); throw new Error('Forbidden acceptance IO'); };
+    globalThis.fetch = () => mark('fetch');
+    for (const name of ['node:http', 'node:https']) {
+      const module = require(name); module.request = module.get = () => mark(name);
+    }
+    const cp = require('node:child_process'); cp.spawn = cp.exec = cp.execFile = () => mark('engine');
+    for (const name of ['readFileSync', 'writeFileSync']) {
+      const original = fs[name]; fs[name] = function(path, ...args) {
+        if (String(path).startsWith(${JSON.stringify(formal)})) return mark('formal-data');
+        return original.call(fs, path, ...args);
+      };
+    }
+    require('node:module').syncBuiltinESMExports();
+  `);
+  const { child, exited } = launch(root, listenPort, owner, {
+    MUGI_RUN_MODE: 'acceptance', MUGI_ACCEPTANCE_ROOT: data,
+    MUGI_DATA_DIR: formal, VOICEVOX_DIR: formal, MUGI_DAILY_USD: '0',
+    ANTHROPIC_API_KEY: 'fake-anthropic', GOOGLE_TTS_API_KEY: 'fake-google', AZURE_SPEECH_KEY: 'fake-azure',
+    NODE_OPTIONS: `--require="${guardPath}"`,
+  });
+  try {
+    const base = `http://127.0.0.1:${listenPort}`;
+    let ready = false;
+    for (let i = 0; i < 100; i++) {
+      if (child.exitCode !== null) throw new Error('Acceptance bundle exited');
+      try { ready = (await fetch(base + '/api/health')).ok; } catch { }
+      if (ready) break; await delay(100);
+    }
+    assert.equal(ready, true);
+    assert.equal((await (await fetch(base + '/api/runtime')).json()).mode, 'acceptance');
+    for (const path of ['/api/chat','/api/chat/judge','/api/chat/fix-tip','/api/lookup','/api/tts','/api/voicevox/start','/api/openai/login','/api/images/generate','/api/settings/budget','/api/runtime']) {
+      const r = await fetch(base + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'normal', usd: 0, providers: ['openai','anthropic'] }) });
+      assert.equal(r.status, 423, path); assert.equal((await r.json()).error, 'acceptance_mode');
+    }
+    for (const path of ['/api/chat/status', '/api/openai/status', '/api/tts/status', '/api/usage']) assert.equal((await fetch(base + path)).status, 200);
+    await assert.rejects(() => import('node:fs/promises').then(fs => fs.stat(violation)), { code: 'ENOENT' });
+    await writeFile(join(data, `runtime/node-stop-${owner}.request`), '');
+    assert.equal(await boundedExit(exited), 0);
+    assert.equal(await (await import('node:fs/promises')).readFile(join(formal, 'credentials.json'), 'utf8'), '{"fake":"never-read"}');
+  } finally {
+    if (child.exitCode === null) child.kill(); await boundedExit(exited);
+    for (const dir of [root, data, formal]) await rm(dir, { recursive: true, force: true });
   }
 });

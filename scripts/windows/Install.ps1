@@ -1,8 +1,14 @@
+param([string]$NodeHome = '', [ValidateSet('Acceptance', 'Normal')][string]$Mode = 'Acceptance', [string]$AcceptanceRoot = '')
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot/Runtime.ps1"
+. "$PSScriptRoot/Tools.ps1"
 $root = (Resolve-Path "$PSScriptRoot/../..").Path
 Set-Location $root
-$directory = Join-Path $root '.runtime'
+$tools = Resolve-MugiNode $NodeHome
+$layout = Resolve-MugiLayout $root $Mode $AcceptanceRoot
+$directory = $layout.Runtime
+$env:MUGI_RUN_MODE = $Mode.ToLowerInvariant()
+$env:MUGI_ACCEPTANCE_ROOT = $layout.AcceptanceRoot
 New-Item -ItemType Directory -Force $directory | Out-Null
 $lock = Open-MugiLock $directory
 try {
@@ -14,13 +20,7 @@ try {
         if ($p) { $p.Dispose(); throw 'An owned orphan Node is alive. Run Stop.ps1 first.' }
         Remove-Item -LiteralPath (Join-Path $directory 'server.json')
     }
-    $nodeVersion = & node.exe --version
-    if ($LASTEXITCODE -ne 0) { throw 'Install Node.js 24 LTS first.' }
-    $major = [int]($nodeVersion.TrimStart('v').Split('.')[0])
-    if ($major -lt 24) { throw 'Node.js 24 LTS or newer required for this setup.' }
-    & npm.cmd ci --no-audit --no-fund
-    if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' }
-    & npm.cmd run build
-    if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
+    Invoke-MugiNpm $tools @('ci', '--no-audit', '--no-fund')
+    Invoke-MugiNpm $tools @('run', 'build')
     Write-Host 'Installed. No paid services were enabled.'
 } finally { $lock.Dispose() }

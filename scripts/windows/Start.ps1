@@ -1,9 +1,12 @@
-param([string]$AllowedHost = '')
+param([string]$NodeHome = '', [ValidateSet('Acceptance', 'Normal')][string]$Mode = 'Acceptance', [string]$AcceptanceRoot = '', [string]$AllowedHost = '')
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot/Runtime.ps1"
+. "$PSScriptRoot/Tools.ps1"
 $root = (Resolve-Path "$PSScriptRoot/../..").Path
 Set-Location $root
-$directory = Join-Path $root '.runtime'
+$tools = Resolve-MugiNode $NodeHome
+$layout = Resolve-MugiLayout $root $Mode $AcceptanceRoot
+$directory = $layout.Runtime
 New-Item -ItemType Directory -Force $directory | Out-Null
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 & icacls.exe $directory /inheritance:r /grant:r "${sid}:(OI)(CI)F" | Out-Null
@@ -22,9 +25,9 @@ try {
     $orphan = Read-MugiRecord $serverPath
     if ($orphan) { Stop-MugiServer $orphan; Remove-Item -LiteralPath $serverPath }
     if (!(Test-Path 'dist-server/production.js')) { throw 'Run Install.ps1 first.' }
-    $node = (Get-Command node.exe -CommandType Application).Source
+    $node = $tools.Node
     # Refuse a port collision before launch; never terminate the process holding it.
-    $probe = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 3004)
+    $probe = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, $layout.Port)
     try { $probe.Start() } finally { $probe.Stop() }
     $hostProcess = Get-Process -Id $PID
     try { $hostRecord = New-MugiRecord $hostProcess 'host' (Join-Path $PSScriptRoot 'Start.ps1') $owner }
@@ -32,8 +35,11 @@ try {
     Save-MugiRecord $hostPath $hostRecord
     $hostSaved = $true
     $env:MUGI_ALLOWED_HOSTS = $AllowedHost
-    $env:MUGI_DATA_DIR = Join-Path $env:LOCALAPPDATA 'MugiTutor'
-    $env:MUGI_PORT = '3004'
+    $env:MUGI_DATA_DIR = $layout.Data
+    $env:MUGI_RUN_MODE = $Mode.ToLowerInvariant()
+    $env:MUGI_ACCEPTANCE_ROOT = $layout.AcceptanceRoot
+    $env:MUGI_PORT = [string]$layout.Port
+    Write-Host "Mugi $Mode mode; loopback port $($layout.Port); isolated runtime: $directory"
     $failures = 0
     while ($failures -lt 5 -and !(Test-Path -LiteralPath $stopPath)) {
         # Release process handles from prior runs; healthy restarts may continue for months.
@@ -62,8 +68,8 @@ try {
             if ([datetime]::UtcNow -lt $nextHealth) { continue }
             $nextHealth = [datetime]::UtcNow.AddSeconds(10)
             try {
-                $h = Invoke-RestMethod 'http://127.0.0.1:3004/api/health' -TimeoutSec 5
-                if ($h.ok -ne $true -or $h.mode -ne 'production') { throw 'Unexpected health response' }
+                $h = Invoke-RestMethod "http://127.0.0.1:$($layout.Port)/api/health" -TimeoutSec 5
+                if ($h.ok -ne $true -or $h.mode -ne 'production' -or $h.runMode -ne $Mode.ToLowerInvariant()) { throw 'Unexpected health response' }
                 if ($null -eq $healthySince) { $healthySince = [datetime]::UtcNow }
                 $healthySeconds = [Math]::Max($healthySeconds, ([datetime]::UtcNow - $healthySince).TotalSeconds)
                 $misses = 0

@@ -34,3 +34,11 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: '& ./scripts/windows/Test-Runtime.ps1'
+      - name: ZIP Node path with spaces and isolated layout (PowerShell 5.1)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: '& ./scripts/windows/Test-Tools.ps1'
+      - name: ZIP Node path with spaces and isolated layout (PowerShell 7)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '& ./scripts/windows/Test-Tools.ps1'

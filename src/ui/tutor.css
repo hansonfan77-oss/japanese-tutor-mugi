@@ -271,3 +271,7 @@
 @media (prefers-reduced-motion: reduce) {
   .tutor *, .sheet-dark * { scroll-behavior: auto !important; animation-duration: 0.01ms !important; }
 }
+
+.acceptance-banner { position: fixed; top: 0; left: 0; right: 0; z-index: 9; padding: calc(env(safe-area-inset-top) + 6px) 12px 8px; font: 13px/1.5 system-ui; color: #fff; background: #493700; pointer-events: none; }
+body:has(.acceptance-banner) .tutor-top { margin-top: 72px; }
+body:has(.acceptance-banner) .tutor-zoom-tools { top: calc(env(safe-area-inset-top) + 84px); }

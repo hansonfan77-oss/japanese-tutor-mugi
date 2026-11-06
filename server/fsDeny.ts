@@ -4,6 +4,11 @@
 // The first entries are Vite's own defaults (fs.deny is replaced when set, so they are repeated here).
 // tests: src/game/__tests__/fsDeny.test.ts checks these with Vite's isFileServingAllowed.
 export const FS_DENY: string[] = [
+  '**/acceptance-root.json',
+  '**/credentials.json',
+  '**/master.key',
+  '**/.mugi-acceptance',
+  '**/runtime/**',
   '.env',
   '.env.*',
   '*.{crt,pem,key,p12,pfx,cer,der}',

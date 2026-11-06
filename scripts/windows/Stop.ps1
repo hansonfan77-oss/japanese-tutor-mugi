@@ -1,7 +1,10 @@
+param([ValidateSet('Acceptance', 'Normal')][string]$Mode = 'Acceptance', [string]$AcceptanceRoot = '')
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot/Runtime.ps1"
+. "$PSScriptRoot/Tools.ps1"
 $root = (Resolve-Path "$PSScriptRoot/../..").Path
-$directory = Join-Path $root '.runtime'
+$layout = Resolve-MugiLayout $root $Mode $AcceptanceRoot $false
+$directory = $layout.Runtime
 if (!(Test-Path -LiteralPath $directory)) { Write-Host 'Mugi is stopped.'; return }
 $hostPath = Join-Path $directory 'host.json'
 $hostRecord = Read-MugiRecord $hostPath

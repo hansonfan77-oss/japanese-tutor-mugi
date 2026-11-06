@@ -13,3 +13,5 @@ voicevox_engine/
 
 dist-server/
 .runtime/
+
+.mugi-acceptance

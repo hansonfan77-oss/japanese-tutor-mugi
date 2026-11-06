@@ -1,5 +1,6 @@
 /** Private host: built static frontend + the same guarded APIs used in development. */
 import { createServer } from 'node:http';
+import { existsSync, unlinkSync } from 'node:fs';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { resolve, relative, extname, sep, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +11,22 @@ import { mountUsage } from './usage.ts';
 import { guardApi, type GuardOptions } from './apiGuard.ts';
 
 const mime: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.mp3': 'audio/mpeg', '.ico': 'image/x-icon', '.json': 'application/json' };
+// Serve only supported public resources, even if a secret/backup is accidentally copied into dist.
+// Colon and trailing dot/space rejection also closes Windows ADS and filename normalization aliases.
+function publicPath(path: string): boolean {
+  if (path.split('/').some(p => p.startsWith('.') || /[\\:\x00-\x1f]/.test(p) || /[. ]$/.test(p))) return false;
+  if (['/', '/index.html', '/offline.html', '/sw.js', '/manifest.webmanifest', '/favicon.ico'].includes(path)) return true;
+  if (/^\/(?:favicon-32|apple-touch-icon|icon-192|icon-512|icon-maskable-512)\.png$/.test(path)) return true;
+  if (/^\/assets\/[a-zA-Z0-9_/-]+\.(?:js|css|woff2?)$/.test(path)) return true;
+  if (/^\/(?:characters|backgrounds)\/[a-zA-Z0-9_/-]+\.(?:png|webp|jpe?g)$/.test(path)) return true;
+  if (/^\/characters\/[a-zA-Z0-9_-]+\/tutor\.json$/.test(path)) return true;
+  return /^\/audio\/[a-zA-Z0-9_/-]+\.(?:mp3|wav|ogg)$/.test(path);
+}
+
 export function productionApp(root: string, allowedHosts: string[] = []) {
+  if (allowedHosts.some(h => !/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(h))) {
+    throw new Error('Production allowed hosts must be exact DNS names, without wildcards, suffix rules or ports');
+  }
   const app = connect();
   const guard: GuardOptions = { allowedHosts, lan: false };
   // Also applies to SSE, OAuth callbacks, errors and health responses.
@@ -38,13 +54,13 @@ export function productionApp(root: string, allowedHosts: string[] = []) {
       try { pathname = decodeURIComponent(new URL(req.url ?? '/', 'http://localhost').pathname); }
       catch { res.writeHead(400); res.end(); return; }
       // Exact files only: never return the app shell for unknown APIs or private/dot paths.
-      if (pathname.split('/').some(p => p.startsWith('.') || p.includes('\\')) || pathname.includes('\0')) { res.writeHead(404); res.end(); return; }
+      if (!publicPath(pathname)) { res.writeHead(404); res.end(); return; }
       const dist = await realpath(resolve(root, 'dist'));
       let file: string;
       try { file = await realpath(resolve(dist, '.' + (pathname === '/' ? '/index.html' : pathname))); }
       catch { res.writeHead(404); res.end(); return; }
       const rel = relative(dist, file);
-      if (isAbsolute(rel) || rel.startsWith('..' + sep) || rel === '..' || !(await stat(file)).isFile()) { res.writeHead(404); res.end(); return; }
+      if (isAbsolute(rel) || rel.startsWith('..' + sep) || rel === '..' || !publicPath('/' + rel.split(sep).join('/')) || !(await stat(file)).isFile()) { res.writeHead(404); res.end(); return; }
       res.setHeader('Content-Type', mime[extname(file)] ?? 'application/octet-stream');
       if (rel.startsWith('assets' + sep)) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
       const data = await readFile(file);
@@ -70,9 +86,33 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   server.requestTimeout = 120_000;
   server.headersTimeout = 15_000;
   server.listen(port, '127.0.0.1', () => console.log(`[mugi] production ready on loopback port ${port}`));
-  server.on('error', () => { console.error('[mugi] startup/server error'); process.exitCode = 1; });
-  for (const signal of ['SIGTERM', 'SIGINT'] as const) process.on(signal, () => {
+  let stopping = false;
+  let stopTimer: ReturnType<typeof setInterval> | undefined;
+  const shutdown = () => {
+    if (stopping) return;
+    stopping = true;
+    clearInterval(stopTimer);
+    // exit hooks in UsageStore flush accounting; in-flight requests get up to ten seconds.
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(1), 10_000).unref();
+  };
+  const ownerArg = process.argv.find(arg => arg.startsWith('--mugi-owner='));
+  if (ownerArg) {
+    const owner = ownerArg.slice('--mugi-owner='.length);
+    if (!/^[a-f0-9]{32}$/.test(owner)) throw new Error('Invalid supervisor owner');
+    const stopFile = resolve(root, '.runtime', `node-stop-${owner}.request`);
+    stopTimer = setInterval(() => {
+      if (existsSync(stopFile)) {
+        try { unlinkSync(stopFile); } catch { /* a concurrent stop request is harmless */ }
+        shutdown();
+      }
+    }, 1000);
+    stopTimer.unref();
+  }
+  server.on('error', () => {
+    console.error('[mugi] startup/server error');
+    // Do not leave a supervisor-owned process polling forever after EADDRINUSE.
+    process.exit(1);
   });
+  for (const signal of ['SIGTERM', 'SIGINT'] as const) process.on(signal, shutdown);
 }

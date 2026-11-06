@@ -29,7 +29,6 @@ import { fillReadings, loadAnalyzer } from './readings.ts';
 import { dailyLimitHit, getUsageStore, type ClaudeUsage, type UsageStore } from './usage.ts';
 import { guardApi, guardOptionsFrom } from './apiGuard.ts';
 import { handleSettingsApi } from './settingsRoutes.ts';
-import { PROJECT_ROOT } from './voicevoxProcess.ts';
 import { anthropicProvider, describeAnthropicError } from './llm/anthropicProvider.ts';
 import type { LlmChatRequest, LlmProvider, LlmResult, LlmStream } from './llm/provider.ts';
 import type { BetaMessageStreamParams } from '@anthropic-ai/sdk/resources/beta/messages/messages';
@@ -1022,7 +1021,7 @@ export function mountChat(middlewares: import("connect").Server, root: string, m
   // the settings from the sheet: the keys in .env.local are written from this PC only, the daily budget from a trusted request (settingsRoutes.ts)
   middlewares.use('/api/settings', guardApi((req, res) => {
     handleSettingsApi(req, res, {
-      envPath: join(PROJECT_ROOT, '.env.local'),
+      envPath: join(root, '.env.local'),
       guard,
       readUsd: () => readLimits(root, mode).dailyUsd,
       spentTodayUsd: () => getUsageStore(root).dailyCostUsd(),

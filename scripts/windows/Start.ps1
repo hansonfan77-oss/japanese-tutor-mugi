@@ -1,45 +1,89 @@
 param([string]$AllowedHost = '')
 $ErrorActionPreference = 'Stop'
+. "$PSScriptRoot/Runtime.ps1"
 $root = (Resolve-Path "$PSScriptRoot/../..").Path
 Set-Location $root
-New-Item -ItemType Directory -Force '.runtime' | Out-Null
+$directory = Join-Path $root '.runtime'
+New-Item -ItemType Directory -Force $directory | Out-Null
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-& icacls.exe '.runtime' /inheritance:r /grant:r "${sid}:(OI)(CI)F" | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'Cannot restrict runtime log directory permissions.' }
-if (Test-Path '.runtime/host.pid') { throw 'Host PID file exists. Run Stop.ps1 and check processes first.' }
-if (!(Test-Path 'dist-server/production.js')) { throw 'Run Install.ps1 first.' }
-# Run a visible supervisor. Task Scheduler can launch it at logon under this same user.
-Set-Content '.runtime/host.pid' $PID
-$env:MUGI_ALLOWED_HOSTS = $AllowedHost
-$env:MUGI_DATA_DIR = Join-Path $env:LOCALAPPDATA 'MugiTutor'
-$env:MUGI_PORT = '3004'
-$failures = 0
+& icacls.exe $directory /inheritance:r /grant:r "${sid}:(OI)(CI)F" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Cannot restrict runtime directory permissions.' }
+$lock = Open-MugiLock $directory
+$owner = [guid]::NewGuid().ToString('N')
+$hostPath = Join-Path $directory 'host.json'
+$serverPath = Join-Path $directory 'server.json'
+$stopPath = Join-Path $directory "stop-$owner.request"
+$child = $null
+$childRecord = $null
+$hostSaved = $false
 try {
-  while ($failures -lt 5) {
-    # Keep at most 5 timestamped log pairs. Logs are private local files; do not upload them blindly.
-    Get-ChildItem '.runtime' -Filter '*.log' | Sort-Object LastWriteTime -Descending | Select-Object -Skip 8 | Remove-Item
-    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-    $child = Start-Process -FilePath (Get-Command node).Source -ArgumentList ('"' + (Join-Path $root 'dist-server/production.js') + '"') -WorkingDirectory $root -PassThru -RedirectStandardOutput ".runtime/$stamp-out.log" -RedirectStandardError ".runtime/$stamp-err.log"
-    Set-Content '.runtime/server.pid' $child.Id
-    $healthy = $false
-    # Check readiness and ongoing liveness, not only a PID. No keys or user data are logged.
-    $misses = 0
-    while (!$child.HasExited) {
-      Start-Sleep -Seconds 10
-      if ($child.HasExited) { break }
-      try {
-        $h = Invoke-RestMethod 'http://127.0.0.1:3004/api/health' -TimeoutSec 5
-        if ($h.ok -ne $true -or $h.mode -ne 'production') { throw 'Unexpected health response' }
-        $healthy = $true; $misses = 0
-      } catch { $misses++ }
-      if ($misses -ge 3) { Stop-Process -Id $child.Id; break }
+    Assert-MugiLegacyStopped $directory
+    Clear-MugiStaleHost $directory
+    $orphan = Read-MugiRecord $serverPath
+    if ($orphan) { Stop-MugiServer $orphan; Remove-Item -LiteralPath $serverPath }
+    if (!(Test-Path 'dist-server/production.js')) { throw 'Run Install.ps1 first.' }
+    $node = (Get-Command node.exe -CommandType Application).Source
+    # Refuse a port collision before launch; never terminate the process holding it.
+    $probe = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 3004)
+    try { $probe.Start() } finally { $probe.Stop() }
+    $hostProcess = Get-Process -Id $PID
+    try { $hostRecord = New-MugiRecord $hostProcess 'host' (Join-Path $PSScriptRoot 'Start.ps1') $owner }
+    finally { $hostProcess.Dispose() }
+    Save-MugiRecord $hostPath $hostRecord
+    $hostSaved = $true
+    $env:MUGI_ALLOWED_HOSTS = $AllowedHost
+    $env:MUGI_DATA_DIR = Join-Path $env:LOCALAPPDATA 'MugiTutor'
+    $env:MUGI_PORT = '3004'
+    $failures = 0
+    while ($failures -lt 5 -and !(Test-Path -LiteralPath $stopPath)) {
+        # Release process handles from prior runs; healthy restarts may continue for months.
+        if ($child) { $child.Dispose(); $child = $null; $childRecord = $null }
+        Get-ChildItem $directory -Filter '*.log' | Sort-Object LastWriteTime -Descending | Select-Object -Skip 8 | Remove-Item
+        $stamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
+        $nodeStopPath = Join-Path $directory "node-stop-$owner.request"
+        Remove-Item -LiteralPath $nodeStopPath -ErrorAction SilentlyContinue
+        $arguments = '"' + (Join-Path $root 'dist-server/production.js') + '" --mugi-owner=' + $owner
+        $child = Start-Process -FilePath $node -ArgumentList $arguments -WorkingDirectory $root -PassThru -RedirectStandardOutput "$directory/$stamp-out.log" -RedirectStandardError "$directory/$stamp-err.log"
+        try {
+            $childRecord = New-MugiRecord $child 'server' ("--mugi-owner=" + $owner) $owner $nodeStopPath
+            Save-MugiRecord $serverPath $childRecord
+        } catch {
+            # This is the Process object we just created, never a PID read from a file.
+            if (!$child.HasExited) { $child.Kill(); $null = $child.WaitForExit(10000) }
+            throw
+        }
+        $healthySince = $null
+        $healthySeconds = 0
+        $misses = 0
+        $nextHealth = [datetime]::UtcNow
+        while (!$child.HasExited -and !(Test-Path -LiteralPath $stopPath)) {
+            Start-Sleep -Seconds 1
+            if ($child.HasExited) { break }
+            if ([datetime]::UtcNow -lt $nextHealth) { continue }
+            $nextHealth = [datetime]::UtcNow.AddSeconds(10)
+            try {
+                $h = Invoke-RestMethod 'http://127.0.0.1:3004/api/health' -TimeoutSec 5
+                if ($h.ok -ne $true -or $h.mode -ne 'production') { throw 'Unexpected health response' }
+                if ($null -eq $healthySince) { $healthySince = [datetime]::UtcNow }
+                $healthySeconds = [Math]::Max($healthySeconds, ([datetime]::UtcNow - $healthySince).TotalSeconds)
+                $misses = 0
+            } catch { $misses++; $healthySince = $null }
+            if ($misses -ge 3) { Stop-MugiServer $childRecord; break }
+        }
+        if (Test-Path -LiteralPath $stopPath) { break }
+        $failures = Get-MugiFailureCount $failures $healthySeconds
+        if ($failures -ge 5) { throw 'Five consecutive short failures. Inspect logs before restarting.' }
+        Write-Host "Mugi exited; consecutive short failure count: $failures/5. Retrying in 10 seconds."
+        for ($i = 0; $i -lt 10 -and !(Test-Path -LiteralPath $stopPath); $i++) { Start-Sleep -Seconds 1 }
     }
-    $failures++
-    Write-Host "Mugi stopped (attempt $failures/5; readiness observed: $healthy). Retrying in 10 seconds."
-    Start-Sleep -Seconds 10
-  }
-  throw 'Restart limit reached. Inspect .runtime logs before restarting.'
 } finally {
-  if ($child -and !$child.HasExited) { Stop-Process -Id $child.Id -ErrorAction SilentlyContinue }
-  Remove-Item '.runtime/host.pid', '.runtime/server.pid' -ErrorAction SilentlyContinue
+    try {
+        if ($childRecord) { Stop-MugiServer $childRecord }
+        if ($hostSaved) {
+            Remove-Item -LiteralPath $hostPath, $serverPath, $stopPath -ErrorAction SilentlyContinue
+        }
+    } finally {
+        if ($child) { $child.Dispose() }
+        $lock.Dispose()
+    }
 }

@@ -1,16 +1,27 @@
 $ErrorActionPreference = 'Stop'
+. "$PSScriptRoot/Runtime.ps1"
 $root = (Resolve-Path "$PSScriptRoot/../..").Path
-Set-Location $root
-# Verify process command lines and executable identity before using saved PIDs (PID reuse protection).
-foreach ($entry in @(@('host.pid', (Join-Path $root 'scripts/windows/Start.ps1'), 'powershell|pwsh'), @('server.pid', (Join-Path $root 'dist-server/production.js'), '^node\.exe$'))) {
-  $file = Join-Path '.runtime' $entry[0]
-  if (!(Test-Path $file)) { continue }
-  $processId = [int](Get-Content $file -Raw)
-  $p = Get-CimInstance Win32_Process -Filter "ProcessId=$processId"
-  if ($p) {
-    if ($p.Name -notmatch $entry[2] -or !$p.CommandLine.Contains($entry[1])) { throw "PID identity uncertain: $processId. Inspect manually." }
-    Stop-Process -Id $processId
-  }
-  Remove-Item $file -ErrorAction SilentlyContinue
+$directory = Join-Path $root '.runtime'
+if (!(Test-Path -LiteralPath $directory)) { Write-Host 'Mugi is stopped.'; return }
+$hostPath = Join-Path $directory 'host.json'
+$hostRecord = Read-MugiRecord $hostPath
+if ($hostRecord) {
+    $p = Get-MugiProcess $hostRecord
+    if ($p) {
+        # Cooperative stop prevents restart races and permits finally cleanup. Never force-kill a shell.
+        try {
+            New-Item -ItemType File -Force (Join-Path $directory "stop-$($hostRecord.Owner).request") | Out-Null
+            if (!$p.WaitForExit(45000)) { throw 'Supervisor did not stop in 45s. Inspect manually; no other process was terminated.' }
+        } finally { $p.Dispose() }
+    }
 }
-Write-Host 'Mugi supervisor/server stopped. Tailscale Serve configuration is unchanged.'
+# A crash releases the lock. Recover only a proven owned orphan; unrelated/reused PIDs are untouched.
+$lock = Open-MugiLock $directory
+try {
+    Assert-MugiLegacyStopped $directory
+    Clear-MugiStaleHost $directory
+    $serverPath = Join-Path $directory 'server.json'
+    $r = Read-MugiRecord $serverPath
+    if ($r) { Stop-MugiServer $r; Remove-Item -LiteralPath $serverPath }
+} finally { $lock.Dispose() }
+Write-Host 'Mugi stopped. Tailscale Serve configuration is unchanged.'

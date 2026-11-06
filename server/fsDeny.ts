@@ -11,6 +11,7 @@ export const FS_DENY: string[] = [
   '.yarnrc.yml',
   '**/.git/**',
   // this project's own folders: usage counts, the speech cache (kept and cached audio), the local VOICEVOX engine
+  '**/.runtime/**',
   '**/.usage/**',
   '**/.tts-cache/**',
   '**/.tts-keep/**',

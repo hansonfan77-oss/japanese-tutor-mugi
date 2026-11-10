@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import Anthropic from '@anthropic-ai/sdk';
 import { fallbackWorthy, firstServing, parseRouting, RoutingError, routingOf, type Service } from '../../../server/aiChain.ts';
 import { parseChatBody, streamReply, type ReplyIo } from '../../../server/claudeChat.ts';
-import { OpenAIError } from '../../../server/llm/openaiProvider.ts';
+import { OpenAIError, openaiProvider } from '../../../server/llm/openaiProvider.ts';
 import type { LlmProvider } from '../../../server/llm/provider.ts';
 import type { ProviderId } from '../../game/claudeProtocol.ts';
 
@@ -200,5 +200,48 @@ describe('streamReply (the chat reply over the services)', () => {
     expect(await streamReply([anthropic, openai], body, io)).toBeNull();
     expect(openai.stream).not.toHaveBeenCalled();
     expect(io.failed).not.toHaveBeenCalled();
+  });
+});
+
+
+// All providers here are in-memory substitutes. No keys or paid services are configured or called.
+describe('T1 exact plan codes, cancellation and partial-output boundary', () => {
+  const codes = ['subscription_sharing_usage_limit_exceeded', 'subscription_sharing_usage_unavailable'];
+  it.each(codes)('%s already matches the generic fallback rule', (code) => {
+    expect(fallbackWorthy(new OpenAIError('x', { code }))).toBe(true);
+    expect(fallbackWorthy(Object.assign(new OpenAIError('x', { code }), { partialOutput: true }))).toBe(false);
+  });
+
+  it.each(codes)('%s uses only the explicitly supplied fallback and only before text', async (code) => {
+    for (const partial of [false, true]) {
+      const source = fake('openai', { error: new OpenAIError('x', { code }), deltas: partial ? ['partial'] : [] });
+      const fallback = fake('anthropic', { deltas: ['substitute only'], spend: false });
+      const { io } = fakeIo();
+      await streamReply([source, fallback], body, io);
+      expect(fallback.stream).toHaveBeenCalledTimes(partial ? 0 : 1);
+      const alone = fakeIo();
+      await streamReply([source], body, alone.io);
+      expect(alone.io.failed).toHaveBeenCalledOnce();
+    }
+  });
+
+  it('an explicit abort cannot fallback even before output', async () => {
+    const source = fake('openai', { error: Object.assign(new Error('cancelled'), { name: 'AbortError' }) });
+    const fallback = fake('anthropic', { spend: false });
+    await streamReply([source, fallback], body, fakeIo().io);
+    expect(fallback.stream).not.toHaveBeenCalled();
+  });
+
+  it.each(codes)('buffered one-shot output followed by %s cannot fallback', async (code) => {
+    const source = fake('openai');
+    source.provider = openaiProvider(async () => new Response([
+      { type: 'response.output_text.delta', delta: 'partial' },
+      { type: 'response.failed', response: { error: { code } } },
+    ].map(e => `data: ${JSON.stringify(e)}\n\n`).join('')));
+    const fallback = fake('anthropic', { spend: false });
+    const run = vi.fn((s: Service) => s.provider.complete({ model: s.model, max_tokens: 10, system: '', messages: [] }));
+    const result = await firstServing([source, fallback], run);
+    expect(result.ok).toBe(false);
+    expect(run).toHaveBeenCalledOnce();
   });
 });

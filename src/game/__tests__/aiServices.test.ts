@@ -74,3 +74,9 @@ describe('ChatGPT status on the phone', () => {
     window.history.replaceState(null, '', '/');
   });
 });
+
+
+it.each(['ready', 'empty', 'incompatible', 'error'])('retains safe catalog state %s without upstream diagnostics', async (modelStatus) => {
+  vi.stubGlobal('fetch', vi.fn(async () => Response.json({ signedIn: true, planEnabled: true, models: [], modelStatus, error: 'SECRET' })));
+  expect(await fetchChatGptStatus()).toEqual({ signedIn: true, planEnabled: true, models: [], modelStatus });
+});

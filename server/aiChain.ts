@@ -58,7 +58,8 @@ const OPENAI_TRANSIENT = /usage_limit|usage_unavailable|rate_limit|insufficient|
  */
 export function fallbackWorthy(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
-  const e = error as { name?: unknown; status?: unknown; timeout?: unknown; code?: unknown; message?: unknown };
+  const e = error as { name?: unknown; status?: unknown; timeout?: unknown; code?: unknown; message?: unknown; partialOutput?: unknown };
+  if (e.partialOutput === true) return false;
   if (e.name === 'AbortError' || e.name === 'APIUserAbortError' || error instanceof Anthropic.APIUserAbortError) return false;
   if (e.timeout === true || error instanceof Anthropic.APIConnectionError || error instanceof TypeError) return true;
   if (typeof e.status === 'number') return [400, 401, 403, 404, 429].includes(e.status) || e.status >= 500;

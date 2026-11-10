@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { SignJWT, createLocalJWKSet, exportJWK, generateKeyPair } from 'jose';
 import { AGENT_NAME, DYNAMIC_CLIENT, ISSUER, RESOURCE, SCOPES, createOAuth, createTransaction, verifyIdentity } from '../../../server/openai/oauth.ts';
+import { describeOpenAIError } from '../../../server/llm/openaiProvider.ts';
 import { PENDING_MAX, allowedModel, createChatGpt } from '../../../server/openai/service.ts';
 import type { Account, CredentialsData, CredentialStore } from '../../../server/openai/credentials.ts';
 import { LOCAL_ONLY_MESSAGE, handleAuthCallback, handleOpenAiApi, isLocalRequest, localPort, redirectUriFor } from '../../../server/openai/routes.ts';
@@ -194,7 +195,7 @@ describe('ChatGPT service', () => {
     const pc = await service.status(true);
     expect(pc).toMatchObject({ signedIn: true, planEnabled: true, email: 'me@example.com' });
     const remote = await service.status(false);
-    expect(remote).toEqual({ signedIn: true, planEnabled: true, models: [] });
+    expect(remote).toEqual({ signedIn: true, planEnabled: true, models: [], modelStatus: 'empty' });
     expect(JSON.stringify(remote)).not.toContain('me@example.com');
     expect(JSON.stringify(remote)).not.toContain('client_real');
 
@@ -227,7 +228,7 @@ describe('ChatGPT service', () => {
     await expect(service.finishLogin({ state: first, code: 'c', client_id: 'client_1' })).rejects.toThrow('登入狀態不符');
   });
 
-  it('the model list keeps the GPT versions below 6 that are listed, Sol first; the list is cached', async () => {
+  it('the catalog preserves visible compatible models in server order without generation limits; it is cached', async () => {
     const models = [
       { slug: 'gpt-5.4', display_name: 'GPT 5.4', visibility: 'list' },
       { slug: 'gpt-5.5-sol', display_name: 'GPT 5.5 Sol', visibility: 'list' },
@@ -239,14 +240,16 @@ describe('ChatGPT service', () => {
     const store = memoryStore({ client_id: 'c', subject: 's', email: '', name: '', access_token: 'AT', refresh_token: 'RT', scopes: [SCOPES.split(' ')].flat(), expiresAt: Date.now() + 3_600_000 });
     const service = createChatGpt({ store, oauth: createOAuth(f.fn), fetcher: f.fn });
     expect(await service.models()).toEqual([
-      { slug: 'gpt-5.5-sol', label: 'GPT 5.5 Sol' },
       { slug: 'gpt-5.4', label: 'GPT 5.4' },
+      { slug: 'gpt-5.5-sol', label: 'GPT 5.5 Sol' },
+      { slug: 'gpt-6', label: 'GPT 6' },
+      { slug: 'o3', label: 'o3' },
     ]);
     await service.models();
     expect(f.calls.filter((c) => c.url === `${RESOURCE}/models`)).toHaveLength(1);
     expect(allowedModel('gpt-5.4')).toBe(true);
-    expect(allowedModel('gpt-6')).toBe(false);
-    expect(allowedModel('o3')).toBe(false);
+    expect(allowedModel('gpt-6')).toBe(true);
+    expect(allowedModel('o3')).toBe(true);
   });
 
   it('a Responses call carries the account token and goes to the plan endpoint', async () => {
@@ -255,6 +258,8 @@ describe('ChatGPT service', () => {
     const service = createChatGpt({ store, oauth: createOAuth(f.fn), fetcher: f.fn });
     const response = await service.provider().complete({ model: 'gpt-5.4', max_tokens: 10, system: 's', messages: [{ role: 'user', content: 'hi' }] });
     expect(response.model).toBe('gpt-5.4');
+    const wire = JSON.parse(String(f.calls.find((c) => c.url === `${RESOURCE}/responses`)?.init?.body));
+    expect(wire).toEqual({ model: 'gpt-5.4', instructions: 's', input: [{ role: 'user', content: 'hi' }], store: false, stream: true });
     const call = f.calls.find((c) => c.url === `${RESOURCE}/responses`);
     expect((call?.init?.headers as Record<string, string>).Authorization).toBe('Bearer AT-SECRET');
   });
@@ -388,4 +393,97 @@ describe('local only', () => {
     expect(JSON.parse(r.out.body)).toMatchObject({ ok: true });
     expect(store.data.account).toBeNull();
   });
+});
+
+// Catalog failures remain distinguishable and never serialize upstream diagnostic text.
+describe('T1 catalog and HTTP errors (fake fetch only)', () => {
+  const account = (): Account => ({ client_id: 'CLIENT-SECRET', subject: 'SUBJECT-SECRET', email: 'private@example.invalid', name: '',
+    access_token: 'AT-SECRET', refresh_token: 'RT-SECRET', id_token: 'ID-SECRET', scopes: [PLAN_SCOPE_FOR_TEST], expiresAt: Date.now() + 3_600_000 });
+
+  it.each([
+    [[], 'empty'],
+    [[{ slug: 'gpt-image-1', visibility: 'list' }], 'incompatible'],
+    [[{ slug: 'gpt-6.1-example', display_name: 'Visible model', visibility: 'list' }], 'ready'],
+    [[{ slug: 'future-text-model', visibility: 'list' }], 'ready'],
+  ] as const)('distinguishes catalog %j as %s', async (models, modelStatus) => {
+    const f = fakeFetch({ models: [...models] });
+    const service = createChatGpt({ store: memoryStore(account()), oauth: createOAuth(f.fn), fetcher: f.fn });
+    const status = await service.status(false);
+    expect(status.modelStatus).toBe(modelStatus);
+    if (modelStatus === 'ready') expect(status.models).toHaveLength(1);
+    else expect(status.models).toEqual([]);
+  });
+
+  it.each(['network', 'http', 'json', 'shape', 'entry'])('reports %s failure safely through the status endpoint and can recover', async (failure) => {
+    const store = memoryStore(account());
+    const fetcher = vi.fn(async () => {
+      if (failure === 'network') throw new Error('中文秘密 AT-SECRET RT-SECRET');
+      if (failure === 'http') return Response.json({ error: { code: 'AT-SECRET', message: 'RT-SECRET' } }, { status: 503 });
+      if (failure === 'json') return new Response('invalid JSON AT-SECRET');
+      if (failure === 'entry') return Response.json({ models: [null, { visibility: 'list' }] });
+      return Response.json({ data: [] });
+    });
+    const service = createChatGpt({ store, oauth: createOAuth(fetcher), fetcher });
+    const out = fakeRes();
+    await handleOpenAiApi(fakeReq('/status', 'GET', { host: '127.0.0.1:3004', 'x-forwarded-for': '192.0.2.1' }), out.res, service);
+    expect(out.out.status).toBe(200);
+    expect(JSON.parse(out.out.body)).toEqual({ signedIn: true, planEnabled: true, models: [], modelStatus: 'error' });
+    expect(out.out.body).not.toMatch(/SECRET|private@example/);
+    expect(store.data.account).toMatchObject({ access_token: 'AT-SECRET', refresh_token: 'RT-SECRET' });
+    expect(store.save).not.toHaveBeenCalled();
+    fetcher.mockImplementation(async () => Response.json({ models: [] }));
+    expect((await service.status(false)).modelStatus).toBe('empty');
+  });
+
+  it('does not request a catalog before sign-in or plan authorization', async () => {
+    const fetcher = vi.fn(async () => { throw new Error('must not fetch'); });
+    const store = memoryStore();
+    const service = createChatGpt({ store, oauth: createOAuth(fetcher), fetcher });
+    expect(await service.status(false)).toEqual({ signedIn: false, planEnabled: false, models: [] });
+    store.data.account = { ...account(), scopes: ['openid'] };
+    expect(await service.status(false)).toEqual({ signedIn: true, planEnabled: false, models: [] });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['subscription_sharing_usage_limit_exceeded', 429, '方案使用已達限制'],
+    ['subscription_sharing_usage_unavailable', 503, '暫時無法確認'],
+  ])('preserves credentials and maps HTTP %s distinctly', async (code, status, message) => {
+    const f = fakeFetch({ responses: () => Response.json({ error: { code, message: 'upstream private text' } }, { status }) });
+    const store = memoryStore(account());
+    const before = structuredClone(store.data);
+    const service = createChatGpt({ store, oauth: createOAuth(f.fn), fetcher: f.fn });
+    const error = await service.provider().complete({ model: 'gpt-6.1-example', max_tokens: 10, system: '', messages: [] }).catch(e => e);
+    expect(error).toMatchObject({ code, status });
+    expect(describeOpenAIError(error)).toMatchObject({ status, message: expect.stringContaining(message) });
+    expect(store.data).toEqual(before);
+    expect(store.save).not.toHaveBeenCalled();
+    expect(f.calls).toHaveLength(1);
+  });
+});
+
+
+it.each([401, 403, 503])('direct-admission HTTP %s with a detail body preserves credentials', async (status) => {
+  const f = fakeFetch({ responses: () => Response.json({ detail: 'PRIVATE DETAIL' }, { status }) });
+  const store = memoryStore({ client_id: 'c', subject: 's', email: '', name: '', access_token: 'FAKE', refresh_token: 'FAKE-RT',
+    scopes: [PLAN_SCOPE_FOR_TEST], expiresAt: Date.now() + 3_600_000 });
+  const service = createChatGpt({ store, oauth: createOAuth(f.fn), fetcher: f.fn });
+  const error = await service.provider().complete({ model: 'catalog-model', max_tokens: 10, system: '', messages: [] }).catch(e => e);
+  expect(error).toMatchObject({ status, code: 'request_failed' });
+  expect(describeOpenAIError(error).message).not.toContain('PRIVATE DETAIL');
+  expect(store.data.account?.access_token).toBe('FAKE');
+  expect(store.save).not.toHaveBeenCalled();
+});
+
+it('a temporary token refresh failure keeps the fake credentials and reports a catalog error', async () => {
+  const store = memoryStore({ client_id: 'c', subject: 's', email: '', name: '', access_token: 'FAKE', refresh_token: 'FAKE-RT',
+    scopes: [PLAN_SCOPE_FOR_TEST], expiresAt: 0 });
+  const f = fakeFetch();
+  const oauth = createOAuth(f.fn);
+  oauth.refresh = vi.fn(async () => { throw Object.assign(new Error('temporary'), { code: 'subscription_sharing_usage_unavailable', status: 503 }); });
+  const service = createChatGpt({ store, oauth, fetcher: f.fn });
+  expect(await service.status(false)).toMatchObject({ signedIn: true, planEnabled: true, modelStatus: 'error' });
+  expect(store.data.account?.refresh_token).toBe('FAKE-RT');
+  expect(store.save).not.toHaveBeenCalled();
+  expect(f.fn).not.toHaveBeenCalled();
 });

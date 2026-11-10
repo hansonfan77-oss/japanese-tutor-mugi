@@ -122,15 +122,43 @@ describe('AiServiceSection', () => {
     r.unmount();
   });
 
-  it('a model that is not listed shows the first listed one', () => {
+  it('a model that is not listed stays selected with a warning', () => {
     const r = render(<AiServiceSection providers={['openai']} openaiModel="gone" claudeOk chatgpt={SIGNED_IN} onChange={() => {}} onRefresh={() => {}} localPc />);
-    expect((r.host.querySelector('select[aria-label="ChatGPT 模型"]') as HTMLSelectElement).value).toBe('gpt-5.5-sol');
+    expect((r.host.querySelector('select[aria-label="ChatGPT 模型"]') as HTMLSelectElement).value).toBe('gone');
+    expect(r.host.textContent).toContain('不會自動替換');
     r.unmount();
   });
 
   it('a note says the ChatGPT sign-in uses the plan and is not shared', () => {
     const r = render(<AiServiceSection providers={['anthropic']} openaiModel="" claudeOk chatgpt={SIGNED_OUT} onChange={() => {}} onRefresh={() => {}} localPc />);
     expect(r.host.textContent).toContain('不需要 OpenAI API 金鑰');
+    r.unmount();
+  });
+});
+
+
+describe('T1 model catalog messages', () => {
+  it.each([
+    ['error', '模型目錄取得失敗'], ['empty', '此帳號目前沒有可見模型'], ['incompatible', '帳號可見模型目前均不相容'],
+  ] as const)('%s has its own Chinese message and preserves the saved model', (modelStatus, message) => {
+    const onChange = vi.fn();
+    const onRefresh = vi.fn();
+    const r = render(<AiServiceSection providers={['openai']} openaiModel="saved-model" claudeOk={false}
+      chatgpt={{ ...SIGNED_IN, models: [], modelStatus }} onChange={onChange} onRefresh={onRefresh} localPc />);
+    expect(r.host.textContent).toContain(message);
+    expect((r.host.querySelector('select') as HTMLSelectElement).value).toBe('saved-model');
+    expect(onChange).not.toHaveBeenCalled();
+    act(() => button(r.host, '重新整理模型').click());
+    expect(onRefresh).toHaveBeenCalledOnce();
+    expect(switchOf(r.host, 'Claude').checked).toBe(false);
+    r.unmount();
+  });
+
+  it('keeps sign-in separate from plan consent and offers reauthorization on the PC', () => {
+    const r = render(<AiServiceSection providers={['openai']} openaiModel="" claudeOk={false}
+      chatgpt={{ ...SIGNED_IN, planEnabled: false, models: [] }} onChange={() => {}} onRefresh={() => {}} localPc />);
+    expect(r.host.textContent).toContain('尚未授權 ChatGPT 方案使用權');
+    expect(button(r.host, '用 ChatGPT 登入')).toBeDefined();
     r.unmount();
   });
 });

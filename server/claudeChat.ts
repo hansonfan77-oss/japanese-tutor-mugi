@@ -193,7 +193,7 @@ export function chatGptService(): ChatGptService | null {
 /**
  * The services of a request, in the order of its routing. A Claude service needs the key and the daily cap not reached (the cap
  * is reported as dailyCapped); a ChatGPT service needs the signed-in plan and a model (the one named in openaiModel when it is
- * listed, else the first listed). claudeModel: the Claude model of this request (default: the server's own).
+ * listed; only an absent choice uses the first listed). claudeModel: the Claude model of this request (default: the server's own).
  */
 export async function servicesFor(
   routing: Routing, opts: { root: string; mode: string; claudeModel?: string; chatgpt?: ChatGptService | null; reserveUsd?: number },
@@ -223,7 +223,9 @@ export async function servicesFor(
       continue;
     }
     if (!list.length) continue;
-    const model = routing.openaiModel && list.some((m) => m.slug === routing.openaiModel) ? routing.openaiModel : list[0].slug;
+    // A saved choice that disappeared must never silently become another ChatGPT model.
+    if (routing.openaiModel && !list.some((m) => m.slug === routing.openaiModel)) continue;
+    const model = routing.openaiModel || list[0].slug;
     services.push({ id, model, provider: chatgpt.provider(), spend: false });
   }
   return { services, dailyCapped };

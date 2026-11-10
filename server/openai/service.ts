@@ -1,6 +1,7 @@
 // The ChatGPT service: the signed-in account (credentials.ts), its tokens (refresh once at a time), the model list of the
 // plan, the sign-in transactions (oauth.ts) and the transport of the Responses calls (server/llm/openaiProvider.ts).
 // Nothing here is sent to the browser except the status (routes.ts): no token, no client id.
+import { OPENAI_MODEL_MAX_CHARS } from '../../src/game/claudeProtocol.ts';
 import { OpenAIError, openaiProvider, type OpenAITransport } from '../llm/openaiProvider.ts';
 import type { LlmProvider } from '../llm/provider.ts';
 import { DYNAMIC_CLIENT, PLAN_SCOPE, RESOURCE, createTransaction, type Fetcher, type OAuth, type TokenResponse, type Transaction } from './oauth.ts';
@@ -13,21 +14,22 @@ export const PENDING_MAX = 20;
 
 export type ChatGptModel = { slug: string; label: string };
 
-/** the Sol model (the one OpenAI lists first) */
-const isSol = (slug: string): boolean => /-sol$/i.test(slug);
-
-/** the models the app offers: GPT major version below 6 only; a slug whose version cannot be read is not offered */
+/** Local text Responses compatibility: accept catalog slugs regardless of generation/family;
+ * exclude known non-text endpoint families. Visibility is checked separately against the account catalog.
+ * Unknown future text models remain eligible; upstream capability errors are surfaced, never substituted.
+ */
 export function allowedModel(slug: string): boolean {
-  const match = /^gpt-(\d+)(?:\.\d+)?(?:-|$)/i.exec(String(slug));
-  return !!match && Number(match[1]) < 6;
+  return slug.length <= OPENAI_MODEL_MAX_CHARS && /^[a-z0-9][a-z0-9._-]*$/i.test(slug)
+    && !/(?:^|-)(?:image|audio|realtime|transcribe|tts|whisper|embedding|moderation|dall-e|sora)(?:-|$)/i.test(slug);
 }
 
-export type ChatGptStatus = { signedIn: boolean; planEnabled: boolean; email?: string; models: ChatGptModel[] };
+export type ModelStatus = 'ready' | 'empty' | 'incompatible' | 'error';
+export type ChatGptStatus = { signedIn: boolean; planEnabled: boolean; email?: string; models: ChatGptModel[]; modelStatus?: ModelStatus };
 
 export type ChatGptService = {
   /** signed in, with the plan scope: the account can serve requests */
   ready(): boolean;
-  /** the status for the settings (email only when `local`); a failed model list is an empty list */
+  /** the status for the settings (email only when `local`); modelStatus distinguishes failed, empty and incompatible catalogs */
   status(local: boolean): Promise<ChatGptStatus>;
   /** the models of the plan (cached MODELS_CACHE_MS); throws when OpenAI cannot be asked */
   models(): Promise<ChatGptModel[]>;
@@ -57,7 +59,7 @@ export function createChatGpt(opts: ChatGptOptions): ChatGptService {
   const now = opts.now ?? Date.now;
   const pending = new Map<string, Transaction & { epoch: number }>();
   const refreshing = new Map<string, Promise<void>>();
-  let catalog: { clientId: string; until: number; models: ChatGptModel[] } | null = null;
+  let catalog: { clientId: string; until: number; models: ChatGptModel[]; status: ModelStatus } | null = null;
   let authEpoch = 0;
   let providerCache: LlmProvider | null = null;
 
@@ -108,6 +110,7 @@ export function createChatGpt(opts: ChatGptOptions): ChatGptService {
     if (!a?.access_token) throw new OpenAIError('請先登入 ChatGPT。', { status: 401 });
     if (!planEnabled(a)) throw new OpenAIError('已登入，但未授權 ChatGPT plan 使用權；請重新授權。', { status: 403 });
     const token = await ensureToken(a);
+    if (!planEnabled(a)) throw new OpenAIError('尚未授權 ChatGPT 方案使用權，請重新授權。', { status: 403 });
     const headers: Record<string, string> = { Authorization: `Bearer ${token}`, Accept: init.accept };
     if (init.body !== undefined) headers['Content-Type'] = 'application/json';
     const response = await fetcher(`${RESOURCE}${path}`, { method: init.method, headers, body: init.body, signal: init.signal });
@@ -124,13 +127,16 @@ export function createChatGpt(opts: ChatGptOptions): ChatGptService {
     if (catalog && a && catalog.clientId === a.client_id && catalog.until > now()) return catalog.models;
     const response = await api('/models', { method: 'GET', signal: AbortSignal.timeout(30000), accept: 'application/json' });
     const result = (await response.json()) as { models?: unknown };
-    if (!Array.isArray(result.models)) throw new Error('模型清單格式不符官方 OAuth 規格。');
-    // the Sol model first: the app takes the first one as its default
-    const list = (result.models as { slug?: unknown; display_name?: unknown; visibility?: unknown }[])
-      .filter((m) => m.visibility === 'list' && typeof m.slug === 'string' && allowedModel(m.slug))
-      .map((m) => ({ slug: m.slug as string, label: typeof m.display_name === 'string' && m.display_name ? m.display_name : (m.slug as string) }))
-      .sort((x, y) => Number(isSol(y.slug)) - Number(isSol(x.slug)));
-    if (a) catalog = { clientId: a.client_id, until: now() + MODELS_CACHE_MS, models: list };
+    if (!result || !Array.isArray(result.models) || result.models.some((m) => !m || typeof m !== 'object'
+      || (m.visibility === 'list' && typeof m.slug !== 'string'))) throw new Error('模型清單格式不符官方 OAuth 規格。');
+    // Preserve the account's order; never infer availability from a hard-coded model generation.
+    const visible = (result.models as unknown[]).filter((m): m is { slug: string; display_name?: unknown } =>
+      !!m && typeof m === 'object' && (m as { visibility?: unknown }).visibility === 'list'
+      && typeof (m as { slug?: unknown }).slug === 'string');
+    const list = visible.filter((m) => allowedModel(m.slug))
+      .map((m) => ({ slug: m.slug, label: typeof m.display_name === 'string' && m.display_name ? m.display_name : m.slug }));
+    if (a) catalog = { clientId: a.client_id, until: now() + MODELS_CACHE_MS, models: list,
+      status: list.length ? 'ready' : visible.length ? 'incompatible' : 'empty' };
     return list;
   }
 
@@ -147,12 +153,22 @@ export function createChatGpt(opts: ChatGptOptions): ChatGptService {
       const signedIn = !!a?.access_token;
       const plan = planEnabled(a);
       let list: ChatGptModel[] = [];
-      if (signedIn && plan) list = await models().catch(() => []);
+      let modelStatus: ModelStatus | undefined;
+      if (signedIn && plan) {
+        try {
+          list = await models();
+          modelStatus = catalog?.status ?? 'empty';
+        } catch {
+          // Never expose exception messages, upstream bodies, tokens or client IDs through status.
+          modelStatus = 'error';
+        }
+      }
       return {
-        signedIn,
-        planEnabled: plan,
+        signedIn: !!account()?.access_token,
+        planEnabled: planEnabled(account()),
         ...(local && a?.email ? { email: a.email } : {}),
         models: list,
+        ...(modelStatus ? { modelStatus } : {}),
       };
     },
     models,

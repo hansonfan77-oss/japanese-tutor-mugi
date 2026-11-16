@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import connect from 'connect';
 import { mountApplicationApis } from './appRuntime.ts';
 import { runtimePolicy, type RunMode } from './runtimePolicy.ts';
-import { guardApi, type GuardOptions } from './apiGuard.ts';
+import { checkRequestHost, guardApi, type GuardOptions } from './apiGuard.ts';
 
 const mime: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.mp3': 'audio/mpeg', '.ico': 'image/x-icon', '.json': 'application/json' };
 // Serve only supported public resources, even if a secret/backup is accidentally copied into dist.
@@ -35,8 +35,16 @@ export function productionApp(root: string, allowedHosts: string[] = [], options
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Frame-Options', 'DENY');
-    // Host/cross-site guard applies to the static frontend too; keep OAuth POST semantics in its handler.
-    if (req.url?.split('?')[0] === '/auth/callback') return next();
+    const path = req.url?.split('?')[0];
+    // Installed PWA launchers may navigate from another site. Only the public home document gets this exception:
+    // exact path + GET + top-level navigation metadata. APIs, frames, subresources and writes still use guardApi.
+    // Host/socket/pairing checks remain mandatory; no request headers are changed and no CORS permission is added.
+    const homeNavigation = req.method === 'GET' && (path === '/' || path === '/index.html')
+      && req.headers['sec-fetch-mode'] === 'navigate' && req.headers['sec-fetch-dest'] === 'document'
+      && (req.headers['sec-fetch-site'] === 'cross-site' || req.headers['sec-fetch-site'] === 'same-site');
+    if (homeNavigation && checkRequestHost(req, guard).ok) return next();
+    // OAuth callback retains its separate local-only + PKCE/state checks.
+    if (path === '/auth/callback') return next();
     return guardApi((_req, _res) => next(), guard)(req, res);
   });
   mountApplicationApis(app, root, 'production', guard, policy);

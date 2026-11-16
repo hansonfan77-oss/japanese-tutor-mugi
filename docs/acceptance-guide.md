@@ -124,3 +124,17 @@ powershell.exe -NoProfile -File "$repo\scripts\windows\Stop.ps1" -Mode Acceptanc
 ## 9. 後續一般模式（本輪不執行）
 
 只有明確 `-Mode Normal`／`MUGI_RUN_MODE=normal` 才會掛載原供應商。驗收 checkout 已被標記，**不能原地變成一般模式**；請在另一個一般 checkout 準備 Node 24，以 `-Mode Normal -NodeHome ...` 安裝與啟動。仍使用原有 3004、資料與安全 guard，不自動匯入或搬移驗收資料。恢復真實 AI/OAuth/VOICEVOX/瀏覽器語音前，須另行明確授權與驗收。
+
+## 10. Android 已安裝 PWA 的首頁導覽（2026-11-17）
+
+使用者回報 `2714f7d` 在 Windows Acceptance 的安裝、啟動、停止及 health 正常，私人 HTTPS 在 Android Chrome 可開啟，但桌面 PWA 圖示開啟首頁得到 `403 forbidden`／「不接受其他網站發出的請求」。這是使用者實機結果；本輪沒有直接操作該主機或更動 Serve。
+
+伺服器原本把 API 的同源規則也套用於首頁。在本機用假 Host 與 Fetch Metadata 重現：`GET /`、`Sec-Fetch-Site: cross-site`（或 `same-site`）、`Sec-Fetch-Mode: navigate`、`Sec-Fetch-Dest: document` 被拒絕。這證實該拒絕路徑，不代表已擷取或確認 Android 的實際請求標頭。
+
+修正只允許上述頂層文件導覽讀取公開 `/` 或 `/index.html`（可帶 query）；仍先檢查精確 Host 與 socket／配對條件。`Sec-Fetch-User` 不作必要條件，因為桌面啟動不保證帶上該欄位。首頁是公開靜態文件，沒有敏感操作，跨站進站可讀取它；敏感 API 的 Origin／Fetch Metadata 規則完全保留。一般 fetch、iframe、非 GET、資源檔及其他路徑不適用例外。OAuth callback 繼續用原有本機限定、PKCE／state 保護，不新增 CORS、不改寫或記錄請求標頭。
+
+自動化回歸以本機 HTTP 請求驗證首頁、錯誤 Host、跨站 API、私有檔與 OAuth／金鑰限制。production smoke 也對實際建置產物的 Normal 與 Acceptance 各驗一次；Acceptance 仍在阻擋網路／引擎／憑證存取的替身下驗證 `externalServices=false`、`browserSpeech=false` 與外部服務操作回 423。Windows 腳本、靜態檔白名單和 Acceptance 政策未放寬。
+
+已有專用副本的更新順序：先用原 AcceptanceRoot 執行 `Stop.ps1`；確認工作目錄乾淨且在 `feat/mugi-private-pwa-animation`，再 `git pull --ff-only origin feat/mugi-private-pwa-animation`。核對新 SHA 後，以原 NodeHome／AcceptanceRoot 執行 `Install.ps1 -Mode Acceptance`（會執行 npm ci 與完整 build），成功才用相同 NodeHome／AcceptanceRoot 及原精確 AllowedHost 執行 `Start.ps1 -Mode Acceptance`。每一步失敗就停止，不 reset、不改分支去覆蓋本機變更、不清除資料、不修改 Tailscale。
+
+啟動後確認 `/api/health` 和 `/api/runtime`，再關閉 PWA 視窗並從原桌面圖示開啟。不需清除網站資料、解除安裝或啟用任何 AI／語音。**Android 桌面啟動是否修復仍待使用者實機確認**。若仍被拒絕，只需提供該請求的方法、路徑（去掉 query）與 `Sec-Fetch-Site`、`Sec-Fetch-Mode`、`Sec-Fetch-Dest`（必要時 `Sec-Fetch-User`）；不提供 Cookie、Authorization、憑證、完整 URL／完整標頭或 HAR。

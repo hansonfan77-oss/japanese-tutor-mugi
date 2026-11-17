@@ -149,3 +149,5 @@ powershell.exe -NoProfile -File "$repo\scripts\windows\Stop.ps1" -Mode Acceptanc
 回歸：`npm run build` 後執行 `npm run test:pwa-browser`，使用系統 Chromium／Chrome；可由 `MUGI_BROWSER_PATH` 指定執行檔。`playwright-core` 只作開發測試，不下載瀏覽器，不在 Windows Install／Start 中啟動瀏覽器。測試用最小公開 HTML、實際建置的 server／worker、假 localStorage 偏好及隔離 Acceptance 資料；不登入、不呼叫真實 AI／STT／TTS。另驗證重開後偏好保留、首頁 no-store／禁止 frame／無 CORS、同源 runtime 保持 Acceptance，跨站 API 仍 403。Linux CI 執行此瀏覽器測試；兩平台保留完整單元測試、build 與 production smoke。
 
 更新仍用上一節停止 → fast-forward 更新 → Install 重建 → Start 流程。PowerShell 腳本需使用每個子程序的 `-ExecutionPolicy RemoteSigned`，不變更系統永久執行原則；多步操作以 `& { ... }` 包住並檢查每個原生命令的 `$LASTEXITCODE`，任何一步失敗即停止。更新後請驗收桌面啟動、移到背景再返回，以及至少兩次「從最近使用的 App 滑掉 → 點原桌面圖示」。不需要重裝 PWA 或清除瀏覽器資料；實機結果待使用者回報。
+
+瀏覽器版本差異：雲端 Chromium 156 的 worker 轉送為 `empty`；CI Chrome 可保留 `document`。瀏覽器回歸接受這兩種合法值，並要求 `response.fromServiceWorker() === true` 證明重開確實經 worker。HTTP 回歸則固定測 `empty`，不因 CI 瀏覽器保留 `document` 而漏測本次修補。

@@ -67,6 +67,7 @@ test('cold reopen through the installed worker serves HTML and keeps API isolati
     page = await context.newPage();
     const response = await enter();
     console.log('Cold reopen metadata:', JSON.stringify(seen.at(-1)));
+    assert.equal(response.fromServiceWorker(), true, 'Cold reopen must actually pass through the installed worker');
     assert.equal(response.status(), 200);
     assert.match(response.headers()['content-type'], /text\/html/);
     assert.equal(response.headers()['cache-control'], 'no-store');
@@ -74,7 +75,11 @@ test('cold reopen through the installed worker serves HTML and keeps API isolati
     assert.equal(response.headers()['access-control-allow-origin'], undefined);
     assert.equal(await page.locator('p').innerText(), 'public home');
     assert.equal(await page.evaluate(() => localStorage.getItem('fixture-preference')), 'yui/classroom');
-    assert.deepEqual(seen.at(-1), { method: 'GET', path: '/', site: 'cross-site', mode: 'navigate', dest: 'empty', status: 200 });
+    // Chromium releases differ: some preserve document, others forward empty. Both must serve the shell.
+    // HTTP regression tests require empty to work even on a browser that preserves document.
+    const { dest, ...metadata } = seen.at(-1);
+    assert.ok(['document', 'empty'].includes(dest), `Unexpected navigation destination: ${dest}`);
+    assert.deepEqual(metadata, { method: 'GET', path: '/', site: 'cross-site', mode: 'navigate', status: 200 });
     const runtime = await page.evaluate(async () => (await fetch('/api/runtime')).json());
     assert.equal(runtime.mode, 'acceptance');
     assert.equal(runtime.externalServices, false);

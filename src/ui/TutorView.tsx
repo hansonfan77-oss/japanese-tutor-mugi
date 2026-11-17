@@ -42,6 +42,7 @@ import { ChatBar } from './ChatBar';
 import { IconGear, IconPerson } from './icons';
 import { useVoiceChat, type VoicePhase } from './useVoiceChat';
 import { TutorPortrait, preloadTutorArt, tutorArtDir } from './TutorPortrait';
+import { CafePractice } from './CafePractice';
 import { TutorBackdrop } from './TutorBackdrop';
 import './assistant.css';
 import './tutor.css';
@@ -64,6 +65,7 @@ function voiceValueOf(v: CharacterVoice): string {
 
 /** 日語家教 screen: the whole app (there is no menu to go back to). */
 export default function TutorView() {
+  const [practiceOpen, setPracticeOpen] = useState(false);
   const [settings, setSettings] = useState<TutorSettings>(loadTutor);
   const active: Character = activeCharacter(settings);
   const activeId = active.id;
@@ -184,7 +186,11 @@ export default function TutorView() {
   }, [active.voice, jaEngine, cloud]);
   useEffect(() => () => setSpeakerVoice(null), []);
   // the background music (the tutor's own track, public/audio/bgm.mp3; silent when the file is missing)
-  useEffect(() => { playMusic(); return () => stopMusic(); }, []);
+  useEffect(() => {
+    if (practiceOpen) return;
+    playMusic();
+    return () => stopMusic(0);
+  }, [practiceOpen]);
   useEffect(() => { void claudeStatus().then(setClaude); }, []);
   // back from the ChatGPT sign-in (/?chatgpt=ok): the status is read again, and the marker leaves the address bar
   useEffect(() => { takeChatGptReturn(); refreshChatGpt(); }, [refreshChatGpt]);
@@ -418,6 +424,7 @@ export default function TutorView() {
             </svg>
           </button>
         </div>
+        <button className="cafe-entry" disabled={busy} onClick={() => { stopMic(); stopSpeaking(); setPracticeOpen(true); }}>咖啡店語音練習</button>
         {zoom.on && showBg && (
           <div className="as-seg tutor-target" role="radiogroup" aria-label="縮放的對象">
             <button type="button" role="radio" aria-checked={zoomTarget === 'figure'} className={zoomTarget === 'figure' ? 'on' : undefined}
@@ -436,6 +443,8 @@ export default function TutorView() {
           </div>
         )}
       </div>
+
+      {practiceOpen && <CafePractice art={art} onExit={() => setPracticeOpen(false)} />}
 
       <section className="chat-dock">
         <ChatBar

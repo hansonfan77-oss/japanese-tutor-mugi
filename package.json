@@ -13,7 +13,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "start": "node dist-server/production.js",
-    "test:pwa-browser": "node --test scripts/test-pwa-navigation.mjs"
+    "test:pwa-browser": "node --test --test-concurrency=1 scripts/test-pwa-navigation.mjs scripts/test-cafe-practice.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.135.0",

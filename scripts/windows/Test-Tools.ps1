@@ -107,8 +107,11 @@ try {
         $errPath = Join-Path $testRoot 'desktop-error.txt'
         $p = Start-Process $Link.TargetPath -ArgumentList ($Link.Arguments + ' -NonInteractive') -PassThru -RedirectStandardOutput (Join-Path $testRoot 'desktop-out.txt') -RedirectStandardError $errPath
         try {
+            # Retain the process handle: PowerShell 5.1 can otherwise lose ExitCode for a fast launcher.
+            $null = $p.Handle
             if (!$p.WaitForExit(60000)) { throw 'Desktop launcher test timed out' }
-            if ($p.ExitCode -ne 0) { throw (Get-Content (Join-Path $testRoot 'desktop-out.txt') -Raw) }
+            $p.WaitForExit() # Drain redirected streams after the bounded exit.
+            if ($p.ExitCode -ne 0) { throw ('Desktop exit code: ' + $p.ExitCode + ' ' + (Get-Content (Join-Path $testRoot 'desktop-out.txt') -Raw)) }
         } finally { $p.Dispose() }
     }
     Invoke-TestShortcut $startLink

@@ -13,3 +13,4 @@ try {
     if (!$NonInteractive) { $null = Read-Host 'Press Enter to close (no settings were reset)' }
     exit 1
 }
+exit 0

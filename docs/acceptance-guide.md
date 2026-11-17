@@ -131,10 +131,21 @@ powershell.exe -NoProfile -File "$repo\scripts\windows\Stop.ps1" -Mode Acceptanc
 
 伺服器原本把 API 的同源規則也套用於首頁。在本機用假 Host 與 Fetch Metadata 重現：`GET /`、`Sec-Fetch-Site: cross-site`（或 `same-site`）、`Sec-Fetch-Mode: navigate`、`Sec-Fetch-Dest: document` 被拒絕。這證實該拒絕路徑，不代表已擷取或確認 Android 的實際請求標頭。
 
-修正只允許上述頂層文件導覽讀取公開 `/` 或 `/index.html`（可帶 query）；仍先檢查精確 Host 與 socket／配對條件。`Sec-Fetch-User` 不作必要條件，因為桌面啟動不保證帶上該欄位。首頁是公開靜態文件，沒有敏感操作，跨站進站可讀取它；敏感 API 的 Origin／Fetch Metadata 規則完全保留。一般 fetch、iframe、非 GET、資源檔及其他路徑不適用例外。OAuth callback 繼續用原有本機限定、PKCE／state 保護，不新增 CORS、不改寫或記錄請求標頭。
+修正只允許 `GET /` 或 `GET /index.html`（可帶 query）、`Sec-Fetch-Mode: navigate` 且 `Sec-Fetch-Dest: document` 或 `empty` 的公開首頁導覽；仍先檢查精確 Host 與 socket／配對條件。`empty` 是 Chromium 經 Service Worker `fetch(event.request)` 轉送導覽的實測值，不是允許一般 fetch：`cors`、`no-cors`、`same-origin` mode 的跨站請求仍拒絕。`Sec-Fetch-User` 不作必要條件，因為桌面啟動不保證帶上該欄位。敏感 API 的 Origin／Fetch Metadata 規則完全保留；非 GET、資源檔及其他路徑不適用例外。明示 `iframe`／`frame` destination 仍拒絕；worker 轉送後的 destination 無法區分原本是否為 frame，故首頁一律保留 `X-Frame-Options: DENY` 防止嵌入。OAuth callback 繼續用原有本機限定、PKCE／state 保護，不新增 CORS、不改寫請求標頭。
 
 自動化回歸以本機 HTTP 請求驗證首頁、錯誤 Host、跨站 API、私有檔與 OAuth／金鑰限制。production smoke 也對實際建置產物的 Normal 與 Acceptance 各驗一次；Acceptance 仍在阻擋網路／引擎／憑證存取的替身下驗證 `externalServices=false`、`browserSpeech=false` 與外部服務操作回 423。Windows 腳本、靜態檔白名單和 Acceptance 政策未放寬。
 
 已有專用副本的更新順序：先用原 AcceptanceRoot 執行 `Stop.ps1`；確認工作目錄乾淨且在 `feat/mugi-private-pwa-animation`，再 `git pull --ff-only origin feat/mugi-private-pwa-animation`。核對新 SHA 後，以原 NodeHome／AcceptanceRoot 執行 `Install.ps1 -Mode Acceptance`（會執行 npm ci 與完整 build），成功才用相同 NodeHome／AcceptanceRoot 及原精確 AllowedHost 執行 `Start.ps1 -Mode Acceptance`。每一步失敗就停止，不 reset、不改分支去覆蓋本機變更、不清除資料、不修改 Tailscale。
 
 啟動後確認 `/api/health` 和 `/api/runtime`，再關閉 PWA 視窗並從原桌面圖示開啟。不需清除網站資料、解除安裝或啟用任何 AI／語音。**Android 桌面啟動是否修復仍待使用者實機確認**。若仍被拒絕，只需提供該請求的方法、路徑（去掉 query）與 `Sec-Fetch-Site`、`Sec-Fetch-Mode`、`Sec-Fetch-Dest`（必要時 `Sec-Fetch-User`）；不提供 Cookie、Authorization、憑證、完整 URL／完整標頭或 HAR。
+
+
+### 10.1 滑掉 PWA 後重開的 403（後續修正）
+
+使用者在更新／重建 `e669deb` 後回報一度可開啟，後續釐清：切到背景再回來正常，從最近使用的 App 滑掉後重開會出問題；截圖顯示的是 `forbidden`／「不接受其他網站發出的請求」，不是純黑的 React 畫面。沒有證據將原因歸於結衣、Mugi 或內建教室，故本次不修改角色、背景或儲存資料。
+
+在隔離 Chromium 中以兩個 loopback origin、專用臨時 profile 與 Acceptance 伺服器重現。首次導覽為 `GET / + cross-site + navigate + document → 200`；安裝本專案的 Service Worker、關閉整個瀏覽器、保留該測試 profile 後重開，實際網路請求變成 `GET / + cross-site + navigate + empty → 403`。先前只測到 document 而漏掉此路徑。本次只擴充首頁導覽的 destination，修後同一瀏覽器流程回 200。這是雲端 Chromium 的真實瀏覽器證據，**不是 Android 標頭擷取或 Android 已驗收**。
+
+回歸：`npm run build` 後執行 `npm run test:pwa-browser`，使用系統 Chromium／Chrome；可由 `MUGI_BROWSER_PATH` 指定執行檔。`playwright-core` 只作開發測試，不下載瀏覽器，不在 Windows Install／Start 中啟動瀏覽器。測試用最小公開 HTML、實際建置的 server／worker、假 localStorage 偏好及隔離 Acceptance 資料；不登入、不呼叫真實 AI／STT／TTS。另驗證重開後偏好保留、首頁 no-store／禁止 frame／無 CORS、同源 runtime 保持 Acceptance，跨站 API 仍 403。Linux CI 執行此瀏覽器測試；兩平台保留完整單元測試、build 與 production smoke。
+
+更新仍用上一節停止 → fast-forward 更新 → Install 重建 → Start 流程。PowerShell 腳本需使用每個子程序的 `-ExecutionPolicy RemoteSigned`，不變更系統永久執行原則；多步操作以 `& { ... }` 包住並檢查每個原生命令的 `$LASTEXITCODE`，任何一步失敗即停止。更新後請驗收桌面啟動、移到背景再返回，以及至少兩次「從最近使用的 App 滑掉 → 點原桌面圖示」。不需要重裝 PWA 或清除瀏覽器資料；實機結果待使用者回報。

@@ -58,20 +58,22 @@ async function homeNavigationBoundary(base) {
     });
     req.on('error', reject); req.end();
   });
-  for (const site of ['cross-site', 'same-site']) {
-    const home = await send('/', { 'Sec-Fetch-Site': site });
+  for (const site of ['cross-site', 'same-site']) for (const dest of ['document', 'empty']) {
+    const home = await send('/', { 'Sec-Fetch-Site': site, 'Sec-Fetch-Dest': dest });
     assert.equal(home.status, 200);
     assert.match(home.headers['content-type'], /text\/html/);
     assert.equal(home.headers['cache-control'], 'no-store');
     assert.equal(home.headers['access-control-allow-origin'], undefined);
   }
   for (const path of ['/api/health', '/api/runtime', '/api/settings/keys', '/api/openai/status']) {
-    const api = await send(path);
+    const api = await send(path, { 'Sec-Fetch-Dest': 'empty' });
     assert.equal(api.status, 403, path);
     assert.equal(JSON.parse(api.body).message, '不接受其他網站發出的請求');
   }
   assert.equal((await send('/', { Host: 'wrong.example' })).status, 403);
   assert.equal((await send('/', { 'Sec-Fetch-Dest': 'iframe' })).status, 403);
+  assert.equal((await send('/', { 'Sec-Fetch-Dest': 'empty', 'Sec-Fetch-Mode': 'cors' })).status, 403);
+  assert.equal((await send('/', { 'Sec-Fetch-Dest': 'empty', Host: 'wrong.example' })).status, 403);
   for (const path of ['/.env.local', '/credentials.json', '/src/main.tsx']) {
     assert.equal((await send(path)).status, 403, path);
     assert.equal((await send(path, { 'Sec-Fetch-Site': 'same-origin' })).status, 404, path);

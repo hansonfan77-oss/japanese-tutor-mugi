@@ -26,6 +26,9 @@ jobs:
           MUGI_DATA_DIR: ${{ runner.temp }}/mugi-test-account
       - run: npm run build
       - run: node --test scripts/test-production.mjs
+      - name: Service worker cold reopen in Chromium
+        if: runner.os == 'Linux'
+        run: npm run test:pwa-browser
       - name: Runtime logic and parser on Windows PowerShell 5.1
         if: runner.os == 'Windows'
         shell: powershell

@@ -37,10 +37,13 @@ export function productionApp(root: string, allowedHosts: string[] = [], options
     res.setHeader('X-Frame-Options', 'DENY');
     const path = req.url?.split('?')[0];
     // Installed PWA launchers may navigate from another site. Only the public home document gets this exception:
-    // exact path + GET + top-level navigation metadata. APIs, frames, subresources and writes still use guardApi.
+    // exact path + GET + navigation mode. Chromium forwards a worker-controlled navigation with destination
+    // "empty" (fetch(event.request)); first launch uses "document". Other fetch modes/destinations stay guarded.
+    // X-Frame-Options: DENY also prevents embedding the public shell after worker forwarding.
     // Host/socket/pairing checks remain mandatory; no request headers are changed and no CORS permission is added.
     const homeNavigation = req.method === 'GET' && (path === '/' || path === '/index.html')
-      && req.headers['sec-fetch-mode'] === 'navigate' && req.headers['sec-fetch-dest'] === 'document'
+      && req.headers['sec-fetch-mode'] === 'navigate'
+      && (req.headers['sec-fetch-dest'] === 'document' || req.headers['sec-fetch-dest'] === 'empty')
       && (req.headers['sec-fetch-site'] === 'cross-site' || req.headers['sec-fetch-site'] === 'same-site');
     if (homeNavigation && checkRequestHost(req, guard).ok) return next();
     // OAuth callback retains its separate local-only + PKCE/state checks.

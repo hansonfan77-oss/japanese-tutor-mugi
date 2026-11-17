@@ -79,6 +79,31 @@ describe('private production server (no external AI requests)', () => {
     }
   });
 
+  it.each(['/', '/index.html', '/?vp=1'])('allows a service-worker-forwarded home navigation at %s', async path => {
+    for (const site of ['cross-site', 'same-site']) {
+      const r = await navigationRequest(path, { 'Sec-Fetch-Site': site, 'Sec-Fetch-Dest': 'empty' });
+      expect(r.status).toBe(200);
+      expect(r.body).toContain('Mugi built');
+      expect(r.headers['cache-control']).toBe('no-store');
+      expect(r.headers['x-frame-options']).toBe('DENY');
+      expect(r.headers['access-control-allow-origin']).toBeUndefined();
+    }
+  });
+
+  it('does not treat the worker destination as API, file, Host or write authorization', async () => {
+    const worker = { 'Sec-Fetch-Dest': 'empty' };
+    for (const path of ['/api/health', '/api/runtime', '/api/usage', '/api/settings/keys', '/api/openai/status',
+      '/auth/callback?code=fake', '/assets/app.js', '/.env.local', '/credentials.json']) {
+      expect((await navigationRequest(path, worker)).status).toBe(403);
+    }
+    for (const host of ['evil.example', 'evil.mugi.example.ts.net', 'mugi.example.ts.net:0']) {
+      expect((await navigationRequest('/', { ...worker, Host: host })).status).toBe(403);
+    }
+    for (const method of ['HEAD', 'POST', 'PUT', 'DELETE', 'OPTIONS']) {
+      expect((await navigationRequest('/', { ...worker, 'Content-Type': 'application/json' }, method)).status).toBe(403);
+    }
+  });
+
   it('allows an external Origin only on the public top-level home navigation', async () => {
     expect((await navigationRequest('/', { Origin: 'https://other.example' })).status).toBe(200);
     expect((await navigationRequest('/api/health', { 'Sec-Fetch-Site': 'same-origin', Origin: 'https://other.example' })).status).toBe(403);
@@ -87,7 +112,9 @@ describe('private production server (no external AI requests)', () => {
   it('keeps cross-site fetches, frames, forms and unknown metadata outside the home exception', async () => {
     for (const headers of [
       { 'Sec-Fetch-Mode': 'cors' }, { 'Sec-Fetch-Mode': 'no-cors' }, { 'Sec-Fetch-Mode': '' },
-      { 'Sec-Fetch-Dest': 'iframe' }, { 'Sec-Fetch-Dest': 'empty' }, { 'Sec-Fetch-Dest': '' },
+      { 'Sec-Fetch-Dest': 'iframe' }, { 'Sec-Fetch-Dest': 'frame' }, { 'Sec-Fetch-Dest': '' },
+      { 'Sec-Fetch-Dest': 'empty', 'Sec-Fetch-Mode': 'cors' },
+      { 'Sec-Fetch-Dest': 'empty', 'Sec-Fetch-Mode': 'same-origin' },
       { 'Sec-Fetch-Site': 'unexpected' },
     ]) {
       expect((await navigationRequest('/', headers)).status).toBe(403);

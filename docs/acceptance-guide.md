@@ -124,3 +124,55 @@ powershell.exe -NoProfile -File "$repo\scripts\windows\Stop.ps1" -Mode Acceptanc
 ## 9. 後續一般模式（本輪不執行）
 
 只有明確 `-Mode Normal`／`MUGI_RUN_MODE=normal` 才會掛載原供應商。驗收 checkout 已被標記，**不能原地變成一般模式**；請在另一個一般 checkout 準備 Node 24，以 `-Mode Normal -NodeHome ...` 安裝與啟動。仍使用原有 3004、資料與安全 guard，不自動匯入或搬移驗收資料。恢復真實 AI/OAuth/VOICEVOX/瀏覽器語音前，須另行明確授權與驗收。
+
+## 10. Android 已安裝 PWA 的首頁導覽（2026-11-17）
+
+使用者回報 `2714f7d` 在 Windows Acceptance 的安裝、啟動、停止及 health 正常，私人 HTTPS 在 Android Chrome 可開啟，但桌面 PWA 圖示開啟首頁得到 `403 forbidden`／「不接受其他網站發出的請求」。這是使用者實機結果；本輪沒有直接操作該主機或更動 Serve。
+
+伺服器原本把 API 的同源規則也套用於首頁。在本機用假 Host 與 Fetch Metadata 重現：`GET /`、`Sec-Fetch-Site: cross-site`（或 `same-site`）、`Sec-Fetch-Mode: navigate`、`Sec-Fetch-Dest: document` 被拒絕。這證實該拒絕路徑，不代表已擷取或確認 Android 的實際請求標頭。
+
+修正只允許 `GET /` 或 `GET /index.html`（可帶 query）、`Sec-Fetch-Mode: navigate` 且 `Sec-Fetch-Dest: document` 或 `empty` 的公開首頁導覽；仍先檢查精確 Host 與 socket／配對條件。`empty` 是 Chromium 經 Service Worker `fetch(event.request)` 轉送導覽的實測值，不是允許一般 fetch：`cors`、`no-cors`、`same-origin` mode 的跨站請求仍拒絕。`Sec-Fetch-User` 不作必要條件，因為桌面啟動不保證帶上該欄位。敏感 API 的 Origin／Fetch Metadata 規則完全保留；非 GET、資源檔及其他路徑不適用例外。明示 `iframe`／`frame` destination 仍拒絕；worker 轉送後的 destination 無法區分原本是否為 frame，故首頁一律保留 `X-Frame-Options: DENY` 防止嵌入。OAuth callback 繼續用原有本機限定、PKCE／state 保護，不新增 CORS、不改寫請求標頭。
+
+自動化回歸以本機 HTTP 請求驗證首頁、錯誤 Host、跨站 API、私有檔與 OAuth／金鑰限制。production smoke 也對實際建置產物的 Normal 與 Acceptance 各驗一次；Acceptance 仍在阻擋網路／引擎／憑證存取的替身下驗證 `externalServices=false`、`browserSpeech=false` 與外部服務操作回 423。Windows 腳本、靜態檔白名單和 Acceptance 政策未放寬。
+
+已有專用副本的更新順序：先用原 AcceptanceRoot 執行 `Stop.ps1`；確認工作目錄乾淨且在 `feat/mugi-private-pwa-animation`，再 `git pull --ff-only origin feat/mugi-private-pwa-animation`。核對新 SHA 後，以原 NodeHome／AcceptanceRoot 執行 `Install.ps1 -Mode Acceptance`（會執行 npm ci 與完整 build），成功才用相同 NodeHome／AcceptanceRoot 及原精確 AllowedHost 執行 `Start.ps1 -Mode Acceptance`。每一步失敗就停止，不 reset、不改分支去覆蓋本機變更、不清除資料、不修改 Tailscale。
+
+啟動後確認 `/api/health` 和 `/api/runtime`，再關閉 PWA 視窗並從原桌面圖示開啟。不需清除網站資料、解除安裝或啟用任何 AI／語音。**Android 桌面啟動是否修復仍待使用者實機確認**。若仍被拒絕，只需提供該請求的方法、路徑（去掉 query）與 `Sec-Fetch-Site`、`Sec-Fetch-Mode`、`Sec-Fetch-Dest`（必要時 `Sec-Fetch-User`）；不提供 Cookie、Authorization、憑證、完整 URL／完整標頭或 HAR。
+
+
+### 10.1 滑掉 PWA 後重開的 403（後續修正）
+
+使用者在更新／重建 `e669deb` 後回報一度可開啟，後續釐清：切到背景再回來正常，從最近使用的 App 滑掉後重開會出問題；截圖顯示的是 `forbidden`／「不接受其他網站發出的請求」，不是純黑的 React 畫面。沒有證據將原因歸於結衣、Mugi 或內建教室，故本次不修改角色、背景或儲存資料。
+
+在隔離 Chromium 中以兩個 loopback origin、專用臨時 profile 與 Acceptance 伺服器重現。首次導覽為 `GET / + cross-site + navigate + document → 200`；安裝本專案的 Service Worker、關閉整個瀏覽器、保留該測試 profile 後重開，實際網路請求變成 `GET / + cross-site + navigate + empty → 403`。先前只測到 document 而漏掉此路徑。本次只擴充首頁導覽的 destination，修後同一瀏覽器流程回 200。這是雲端 Chromium 的真實瀏覽器證據，**不是 Android 標頭擷取或 Android 已驗收**。
+
+回歸：`npm run build` 後執行 `npm run test:pwa-browser`，使用系統 Chromium／Chrome；可由 `MUGI_BROWSER_PATH` 指定執行檔。`playwright-core` 只作開發測試，不下載瀏覽器，不在 Windows Install／Start 中啟動瀏覽器。測試用最小公開 HTML、實際建置的 server／worker、假 localStorage 偏好及隔離 Acceptance 資料；不登入、不呼叫真實 AI／STT／TTS。另驗證重開後偏好保留、首頁 no-store／禁止 frame／無 CORS、同源 runtime 保持 Acceptance，跨站 API 仍 403。Linux CI 執行此瀏覽器測試；兩平台保留完整單元測試、build 與 production smoke。
+
+更新仍用上一節停止 → fast-forward 更新 → Install 重建 → Start 流程。PowerShell 腳本需使用每個子程序的 `-ExecutionPolicy RemoteSigned`，不變更系統永久執行原則；多步操作以 `& { ... }` 包住並檢查每個原生命令的 `$LASTEXITCODE`，任何一步失敗即停止。更新後請驗收桌面啟動、移到背景再返回，以及至少兩次「從最近使用的 App 滑掉 → 點原桌面圖示」。不需要重裝 PWA 或清除瀏覽器資料；實機結果待使用者回報。
+
+瀏覽器版本差異：雲端 Chromium 156 的 worker 轉送為 `empty`；CI Chrome 可保留 `document`。瀏覽器回歸接受這兩種合法值，並要求 `response.fromServiceWorker() === true` 證明重開確實經 worker。HTTP 回歸則固定測 `empty`，不因 CI 瀏覽器保留 `document` 而漏測本次修補。
+
+## 11. 桌面一鍵啟動／停止（Acceptance）
+
+完成 Install/build 後，執行一次 `scripts/windows/Install-Shortcuts.ps1`，帶入與 Install 相同的 `-NodeHome`、`-AcceptanceRoot`，以及啟動時使用的精確 `-AllowedHost`。例如（請替換路徑／Host）：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned `
+  -File 'C:\Mugi Acceptance\scripts\windows\Install-Shortcuts.ps1' `
+  -NodeHome 'C:\MugiTools\node-v24.22.2-win-x64' `
+  -AcceptanceRoot 'C:\Mugi Acceptance Data' `
+  -AllowedHost 'your-pc.your-tailnet.ts.net'
+```
+
+此步驟不啟動服務、不重新安裝依賴，只在目前使用者的 Windows 桌面建立：
+
+- **Mugi Start (Acceptance)**：啟動獨立、最小化的監督視窗；確認 health 及 runtime 都是 Acceptance，且 `externalServices=false`、`browserSpeech=false` 才顯示 ready。啟動提示視窗隨後關閉，最小化的伺服器視窗須保留。重複點 Start 若同一個已確認身分的監督程序健康，直接告知已在執行；不啟動第二份。
+- **Mugi Stop (Acceptance)**：沿用 Stop.ps1 的合作式停止、PID／建立時間／命令列身分驗證；停止後不會被監督程序再拉起。不影響其他 Node 或 Tailscale。已停止時再次點擊亦可。
+
+失敗會保留提示視窗，按 Enter 才關閉；不清除設定、不退回 Normal，也不自動殺掉佔用 3006 的其他程式。啟動逾時時，原監督視窗可能仍在嘗試啟動：查看該視窗與 AcceptanceRoot/runtime 日誌，或使用 Stop。捷徑使用 `-File` 與逐參數 Windows 引號，不將路徑拼入 `-Command`；只有該 PowerShell 子程序使用 RemoteSigned，不改永久執行原則、PATH、防火牆或系統服務。群組原則若禁止執行，會照常拒絕，沒有 Bypass 備援。
+
+小 PC 重開機後：登入 Windows → 點 Start → 等 ready → 手機確認 Tailscale 已連線 → 開啟 Mugi。這一版是手動一鍵操作，不是開機自動啟動；也不修改休眠設定或自動開啟手機 VPN。
+
+捷徑記住目前 checkout、Node ZIP、AcceptanceRoot 與 Host。移動資料夾或更換 Node 路徑後，停止服務並用新參數重新執行 Install-Shortcuts；同一 checkout 的受管捷徑可以更新，遇到同名非受管捷徑則拒絕覆寫。若要撤除，只刪掉這兩個桌面捷徑，資料與服務安裝不受影響。更新程式仍走 Stop → git fast-forward → 必要時 Install/build → Start；捷徑不會自動 git pull、更新套件或開啟付費服務。
+
+Windows CI 在隨機測試目錄產生真正的 .lnk，檢查目標與參數，再用捷徑的實際命令執行 Start、重複 Start、Stop、重複 Stop，確認無關 Node 存活及驗收隔離旗標。兩種 PowerShell 皆測試；不寫入 runner 真正桌面。使用者的小 PC 桌面圖示、重開機後操作及手機連線仍待實機確認。

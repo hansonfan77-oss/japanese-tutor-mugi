@@ -3,6 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
+import { request } from 'node:http';
 import { mkdtemp, cp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -44,11 +45,46 @@ async function boundedExit(exited) {
   } finally { timeout.abort(); }
 }
 
+// All connections stay on this runner's loopback; the Host/Fetch Metadata simulate a private HTTPS proxy.
+async function homeNavigationBoundary(base) {
+  const send = (path, headers = {}) => new Promise((resolve, reject) => {
+    const req = request(base + path, { headers: {
+      Host: 'mugi.example.ts.net', 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document',
+      'X-Forwarded-For': '192.0.2.1', 'X-Forwarded-Proto': 'https', ...headers,
+    } }, res => {
+      let body = '';
+      res.setEncoding('utf8'); res.on('data', chunk => { body += chunk; });
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body }));
+    });
+    req.on('error', reject); req.end();
+  });
+  for (const site of ['cross-site', 'same-site']) for (const dest of ['document', 'empty']) {
+    const home = await send('/', { 'Sec-Fetch-Site': site, 'Sec-Fetch-Dest': dest });
+    assert.equal(home.status, 200);
+    assert.match(home.headers['content-type'], /text\/html/);
+    assert.equal(home.headers['cache-control'], 'no-store');
+    assert.equal(home.headers['access-control-allow-origin'], undefined);
+  }
+  for (const path of ['/api/health', '/api/runtime', '/api/settings/keys', '/api/openai/status']) {
+    const api = await send(path, { 'Sec-Fetch-Dest': 'empty' });
+    assert.equal(api.status, 403, path);
+    assert.equal(JSON.parse(api.body).message, '不接受其他網站發出的請求');
+  }
+  assert.equal((await send('/', { Host: 'wrong.example' })).status, 403);
+  assert.equal((await send('/', { 'Sec-Fetch-Dest': 'iframe' })).status, 403);
+  assert.equal((await send('/', { 'Sec-Fetch-Dest': 'empty', 'Sec-Fetch-Mode': 'cors' })).status, 403);
+  assert.equal((await send('/', { 'Sec-Fetch-Dest': 'empty', Host: 'wrong.example' })).status, 403);
+  for (const path of ['/.env.local', '/credentials.json', '/src/main.tsx']) {
+    assert.equal((await send(path)).status, 403, path);
+    assert.equal((await send(path, { 'Sec-Fetch-Site': 'same-origin' })).status, 404, path);
+  }
+}
+
 test('built production bundle serves PWA/API, hides source, and drains on owned stop request', async () => {
   const root = await fixture();
   const owner = randomUUID().replaceAll('-', '');
   const listenPort = await port();
-  const { child, exited } = launch(root, listenPort, owner);
+  const { child, exited } = launch(root, listenPort, owner, { MUGI_ALLOWED_HOSTS: 'mugi.example.ts.net' });
   try {
     const base = `http://127.0.0.1:${listenPort}`;
     let ready = false;
@@ -59,6 +95,7 @@ test('built production bundle serves PWA/API, hides source, and drains on owned 
       await delay(100);
     }
     assert.equal(ready, true);
+    await homeNavigationBoundary(base);
     for (const path of ['/', '/sw.js', '/manifest.webmanifest', '/offline.html', '/api/chat/status', '/api/openai/status', '/api/tts/status', '/api/usage']) {
       const res = await fetch(base + path);
       assert.equal(res.status, 200, path);
@@ -129,7 +166,7 @@ test('acceptance bundle ignores poisoned credentials and forbids HTTP/engine/cre
     require('node:module').syncBuiltinESMExports();
   `);
   const { child, exited } = launch(root, listenPort, owner, {
-    MUGI_RUN_MODE: 'acceptance', MUGI_ACCEPTANCE_ROOT: data,
+    MUGI_RUN_MODE: 'acceptance', MUGI_ACCEPTANCE_ROOT: data, MUGI_ALLOWED_HOSTS: 'mugi.example.ts.net',
     MUGI_DATA_DIR: formal, VOICEVOX_DIR: formal, MUGI_DAILY_USD: '0',
     ANTHROPIC_API_KEY: 'fake-anthropic', GOOGLE_TTS_API_KEY: 'fake-google', AZURE_SPEECH_KEY: 'fake-azure',
     NODE_OPTIONS: `--require=${JSON.stringify(guardPath)}`,
@@ -143,7 +180,11 @@ test('acceptance bundle ignores poisoned credentials and forbids HTTP/engine/cre
       if (ready) break; await delay(100);
     }
     assert.equal(ready, true);
-    assert.equal((await (await fetch(base + '/api/runtime')).json()).mode, 'acceptance');
+    await homeNavigationBoundary(base);
+    const runtime = await (await fetch(base + '/api/runtime')).json();
+    assert.equal(runtime.mode, 'acceptance');
+    assert.equal(runtime.externalServices, false);
+    assert.equal(runtime.browserSpeech, false);
     for (const path of ['/api/chat','/api/chat/judge','/api/chat/fix-tip','/api/lookup','/api/tts','/api/voicevox/start','/api/openai/login','/api/images/generate','/api/settings/budget','/api/runtime']) {
       const r = await fetch(base + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'normal', usd: 0, providers: ['openai','anthropic'] }) });
       assert.equal(r.status, 423, path); assert.equal((await r.json()).error, 'acceptance_mode');

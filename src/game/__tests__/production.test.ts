@@ -42,6 +42,21 @@ function requestHost(path: string, host: string): Promise<number | undefined> {
     req.on('error', reject); req.end();
   });
 }
+// node:http preserves the exact Fetch Metadata under test (fetch may overwrite Sec-Fetch-Mode).
+function navigationRequest(path: string, headers: Record<string, string> = {}, method = 'GET') {
+  return new Promise<{ status: number | undefined; body: string; headers: import('node:http').IncomingHttpHeaders }>((resolve, reject) => {
+    const req = request(base + path, { method, headers: {
+      Host: 'mugi.example.ts.net', 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document',
+      ...headers,
+    } }, res => {
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', chunk => { body += chunk; });
+      res.on('end', () => resolve({ status: res.statusCode, body, headers: res.headers }));
+    });
+    req.on('error', reject); req.end();
+  });
+}
 describe('private production server (no external AI requests)', () => {
   it('serves built HTML and health; API is no-store', async () => {
     expect(await (await fetch(base)).text()).toContain('Mugi built');
@@ -53,6 +68,83 @@ describe('private production server (no external AI requests)', () => {
     expect(usage.headers.get('cache-control')).toBe('no-store');
     expect(await usage.json()).toHaveProperty('months');
   });
+  it.each(['/', '/index.html', '/?from=launcher'])('allows public home document navigation at %s', async path => {
+    for (const site of ['cross-site', 'same-site', 'same-origin', 'none']) {
+      const r = await navigationRequest(path, { 'Sec-Fetch-Site': site });
+      expect(r.status).toBe(200);
+      expect(r.body).toContain('Mugi built');
+      expect(r.headers['cache-control']).toBe('no-store');
+      expect(r.headers['x-frame-options']).toBe('DENY');
+      expect(r.headers['access-control-allow-origin']).toBeUndefined();
+    }
+  });
+
+  it.each(['/', '/index.html', '/?vp=1'])('allows a service-worker-forwarded home navigation at %s', async path => {
+    for (const site of ['cross-site', 'same-site']) {
+      const r = await navigationRequest(path, { 'Sec-Fetch-Site': site, 'Sec-Fetch-Dest': 'empty' });
+      expect(r.status).toBe(200);
+      expect(r.body).toContain('Mugi built');
+      expect(r.headers['cache-control']).toBe('no-store');
+      expect(r.headers['x-frame-options']).toBe('DENY');
+      expect(r.headers['access-control-allow-origin']).toBeUndefined();
+    }
+  });
+
+  it('does not treat the worker destination as API, file, Host or write authorization', async () => {
+    const worker = { 'Sec-Fetch-Dest': 'empty' };
+    for (const path of ['/api/health', '/api/runtime', '/api/usage', '/api/settings/keys', '/api/openai/status',
+      '/auth/callback?code=fake', '/assets/app.js', '/.env.local', '/credentials.json']) {
+      expect((await navigationRequest(path, worker)).status).toBe(403);
+    }
+    for (const host of ['evil.example', 'evil.mugi.example.ts.net', 'mugi.example.ts.net:0']) {
+      expect((await navigationRequest('/', { ...worker, Host: host })).status).toBe(403);
+    }
+    for (const method of ['HEAD', 'POST', 'PUT', 'DELETE', 'OPTIONS']) {
+      expect((await navigationRequest('/', { ...worker, 'Content-Type': 'application/json' }, method)).status).toBe(403);
+    }
+  });
+
+  it('allows an external Origin only on the public top-level home navigation', async () => {
+    expect((await navigationRequest('/', { Origin: 'https://other.example' })).status).toBe(200);
+    expect((await navigationRequest('/api/health', { 'Sec-Fetch-Site': 'same-origin', Origin: 'https://other.example' })).status).toBe(403);
+  });
+
+  it('keeps cross-site fetches, frames, forms and unknown metadata outside the home exception', async () => {
+    for (const headers of [
+      { 'Sec-Fetch-Mode': 'cors' }, { 'Sec-Fetch-Mode': 'no-cors' }, { 'Sec-Fetch-Mode': '' },
+      { 'Sec-Fetch-Dest': 'iframe' }, { 'Sec-Fetch-Dest': 'frame' }, { 'Sec-Fetch-Dest': '' },
+      { 'Sec-Fetch-Dest': 'empty', 'Sec-Fetch-Mode': 'cors' },
+      { 'Sec-Fetch-Dest': 'empty', 'Sec-Fetch-Mode': 'same-origin' },
+      { 'Sec-Fetch-Site': 'unexpected' },
+    ]) {
+      expect((await navigationRequest('/', headers)).status).toBe(403);
+    }
+    for (const method of ['POST', 'PUT', 'DELETE', 'HEAD', 'OPTIONS']) {
+      expect((await navigationRequest('/', { 'Content-Type': 'application/json' }, method)).status).toBe(403);
+    }
+  });
+
+  it('still checks the exact Host on a cross-site home navigation', async () => {
+    for (const host of ['evil.example', 'evil.mugi.example.ts.net', 'mugi.example.ts.net.evil.example', 'mugi.example.ts.net:0']) {
+      expect((await navigationRequest('/', { Host: host })).status).toBe(403);
+    }
+  });
+
+  it('does not extend the navigation exception to APIs, OAuth, assets or private files', async () => {
+    for (const path of ['/api/health', '/api/runtime', '/api/usage', '/api/settings/keys', '/api/openai/status',
+      '/auth/callback?code=fake', '/assets/app.js', '/.env.local', '/credentials.json', '/assets/source.js.map', '/api/unknown']) {
+      const r = await navigationRequest(path);
+      expect(r.status).toBe(403);
+      expect(r.body).not.toMatch(/must-not-leak|secret-credentials|private-source-map/);
+      expect(r.headers['access-control-allow-origin']).toBeUndefined();
+    }
+    for (const path of ['/api/chat', '/api/settings/keys', '/api/openai/login', '/api/openai/logout']) {
+      const r = await navigationRequest(path, { 'Content-Type': 'application/json' }, 'POST');
+      expect(r.status).toBe(403);
+      expect(r.body).toContain('不接受其他網站發出的請求');
+    }
+  });
+
   it('serves immutable assets and supports HEAD', async () => {
     const r = await fetch(base + '/assets/app.js', { method: 'HEAD' });
     expect(r.status).toBe(200);

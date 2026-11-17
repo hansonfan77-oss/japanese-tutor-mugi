@@ -86,3 +86,7 @@ Service Worker 只預存離線提示頁及兩張公開圖示，不儲存應用 H
 4. 在測試副本模擬 supervisor 意外終止，確認孤兒 Node 仍能由新 Start/Stop 依身份恢復。模擬損壞記錄/活的舊 PID 檔必須拒絕猜測殺程序。不要對正式資料做故障注入。
 5. 只啟用私人 Tailscale Serve，確認 ACL；Android/iOS 開 HTTPS、加入主畫面、打字/語音權限允許與拒絕、橫向/鍵盤/背景恢復、離線重連。DevTools 確認 Cache Storage 僅公開離線頁及圖示，手機不能寫金鑰/登入。
 6. 需另外明確授權後才驗證真實 AI/OAuth/VOICEVOX；再測至少過夜運作、磁碟空間及日誌量。現有日誌限制檔數，**單一長期執行的日誌尚無檔案大小上限**，須監測；不將這點宣稱已完成長期壓力驗收。
+
+### Acceptance 桌面捷徑
+
+已有獨立 Acceptance 副本可使用 `scripts/windows/Install-Shortcuts.ps1` 建立一鍵啟動／停止，沿用明確 NodeHome、AcceptanceRoot 與 AllowedHost；不開機自啟、不更動 Tailscale、不啟用外部服務。安裝與重開機後操作見 [驗收指南第 11 節](acceptance-guide.md#11-桌面一鍵啟動停止acceptance)。

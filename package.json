@@ -12,7 +12,8 @@
     "build": "tsc -b && vite build && vite build --ssr server/production.ts --outDir dist-server",
     "preview": "vite preview",
     "test": "vitest run",
-    "start": "node dist-server/production.js"
+    "start": "node dist-server/production.js",
+    "test:pwa-browser": "node --test scripts/test-pwa-navigation.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.135.0",
@@ -30,6 +31,7 @@
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.1.2",
     "jsdom": "30.1.2",
+    "playwright-core": "1.65.1",
     "typescript": "6.0.3",
     "vite": "8.3.3",
     "vitest": "5.0.3"

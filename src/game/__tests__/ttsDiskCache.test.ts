@@ -8,6 +8,15 @@ import { answerTts, cacheKey, sameOriginRequest, type TtsBody } from '../../../s
 import { UsageStore, usageRoute } from '../../../server/usage.ts';
 import { ttsCacheLine } from '../usageView';
 
+// Drain every fixture before deleting its directory, including when an assertion fails.
+const caches: TtsCache[] = [];
+const stores: UsageStore[] = [];
+function fixtureCache(options: ConstructorParameters<typeof TtsCache>[0]) {
+  const cache = new TtsCache(options);
+  caches.push(cache);
+  return cache;
+}
+
 let dir: string;
 let cdir: string;
 beforeEach(() => {
@@ -16,7 +25,9 @@ beforeEach(() => {
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
 });
-afterEach(() => {
+afterEach(async () => {
+  await Promise.all(caches.splice(0).map(cache => cache.settle()));
+  for (const store of stores.splice(0)) store.flush();
   vi.restoreAllMocks();
   rmSync(dir, { recursive: true, force: true });
 });
@@ -66,12 +77,12 @@ describe('key hashing and file names', () => {
 
 describe('TtsCache: memory, disk and restart', () => {
   it('a disk hit after a restart (a new cache instance) returns the stored bytes without synthesizing', async () => {
-    const c1 = new TtsCache({ dir: cdir });
+    const c1 = fixtureCache({ dir: cdir });
     const first = await c1.fetchOnce(K, async () => blob(120));
     expect(first.hit).toBe(false);
     await c1.settle();
 
-    const c2 = new TtsCache({ dir: cdir });
+    const c2 = fixtureCache({ dir: cdir });
     const synth = vi.fn(async () => blob(120, 0x62));
     const again = await c2.fetchOnce(K, synth);
     expect(again.hit).toBe(true);
@@ -81,17 +92,17 @@ describe('TtsCache: memory, disk and restart', () => {
   });
 
   it('a disk hit is promoted to memory: it still answers after the file is gone', async () => {
-    const c1 = new TtsCache({ dir: cdir });
+    const c1 = fixtureCache({ dir: cdir });
     await c1.fetchOnce(K, async () => blob(60));
     await c1.settle();
-    const c2 = new TtsCache({ dir: cdir });
+    const c2 = fixtureCache({ dir: cdir });
     expect(await c2.lookup(K)).toBeDefined();
     rmSync(join(cdir, ttsCacheFileName(K)));
     expect((await c2.lookup(K))?.length).toBe(60);
   });
 
   it('writes the file atomically: the final name holds the whole reply, and no temp file is left', async () => {
-    const c = new TtsCache({ dir: cdir });
+    const c = fixtureCache({ dir: cdir });
     await c.fetchOnce(K, async () => blob(333));
     await c.settle();
     expect(readdirSync(cdir).filter((n) => n.endsWith('.tmp'))).toEqual([]);
@@ -101,7 +112,7 @@ describe('TtsCache: memory, disk and restart', () => {
   it('a failed write is logged and never breaks the reply', async () => {
     // the cache directory cannot be created under a plain file: every write fails
     writeFileSync(join(dir, 'plain'), 'x');
-    const c = new TtsCache({ dir: join(dir, 'plain', 'sub') });
+    const c = fixtureCache({ dir: join(dir, 'plain', 'sub') });
     const r = await c.fetchOnce(K, async () => blob(50));
     expect(r.hit).toBe(false);
     expect(r.buf.length).toBe(50);
@@ -110,9 +121,9 @@ describe('TtsCache: memory, disk and restart', () => {
   });
 
   it('removes leftover temp files of an interrupted write at startup', () => {
-    new TtsCache({ dir: cdir }); // creates the directory
+    fixtureCache({ dir: cdir }); // creates the directory
     writeFileSync(join(cdir, `${ttsCacheFileName(K)}.123.1.abcd.tmp`), 'partial');
-    new TtsCache({ dir: cdir });
+    fixtureCache({ dir: cdir });
     expect(readdirSync(cdir)).toEqual([]);
   });
 });
@@ -120,7 +131,7 @@ describe('TtsCache: memory, disk and restart', () => {
 describe('TtsCache: size cap and eviction', () => {
   it('evicts the least recently used file when over the cap, and a hit saves a file from eviction', async () => {
     let t = 1000;
-    const c = new TtsCache({ dir: cdir, maxBytes: 100, now: () => t, sweepDebounceMs: 60_000 });
+    const c = fixtureCache({ dir: cdir, maxBytes: 100, now: () => t, sweepDebounceMs: 60_000 });
     await c.fetchOnce(K, async () => blob(40)); // mtime 1000
     await c.settle();
     t = 2000;
@@ -139,13 +150,13 @@ describe('TtsCache: size cap and eviction', () => {
 
   it('trims a directory left over the cap once at startup, oldest first', async () => {
     let t = 1000;
-    const big = new TtsCache({ dir: cdir, now: () => t, sweepDebounceMs: 60_000 });
+    const big = fixtureCache({ dir: cdir, now: () => t, sweepDebounceMs: 60_000 });
     for (const [k, when] of [[K, 1000], [K2, 2000], [K3, 3000]] as const) {
       t = when;
       await big.fetchOnce(k, async () => blob(40));
       await big.settle();
     }
-    const small = new TtsCache({ dir: cdir, maxBytes: 100 });
+    const small = fixtureCache({ dir: cdir, maxBytes: 100 });
     await small.settle();
     expect(readdirSync(cdir).filter((n) => n.endsWith('.mp3')).sort()).toEqual(
       [ttsCacheFileName(K2), ttsCacheFileName(K3)].sort(),
@@ -154,7 +165,7 @@ describe('TtsCache: size cap and eviction', () => {
   });
 
   it('a sweep under the cap removes nothing', async () => {
-    const c = new TtsCache({ dir: cdir, maxBytes: 1000, sweepDebounceMs: 10 });
+    const c = fixtureCache({ dir: cdir, maxBytes: 1000, sweepDebounceMs: 10 });
     await c.fetchOnce(K, async () => blob(40));
     await c.settle();
     expect(await c.sweep()).toBe(0);
@@ -162,7 +173,7 @@ describe('TtsCache: size cap and eviction', () => {
   });
 
   it('clear empties the directory and the memory copies', async () => {
-    const c = new TtsCache({ dir: cdir });
+    const c = fixtureCache({ dir: cdir });
     await c.fetchOnce(K, async () => blob(40));
     await c.fetchOnce(K2, async () => blob(40));
     await c.settle();
@@ -175,7 +186,7 @@ describe('TtsCache: size cap and eviction', () => {
 
 describe('TtsCache: concurrent requests and damaged files', () => {
   it('two concurrent requests for the same key share one synthesis; the second waits and is a hit', async () => {
-    const c = new TtsCache({ dir: cdir });
+    const c = fixtureCache({ dir: cdir });
     let release!: (b: Buffer) => void;
     const gate = new Promise<Buffer>((r) => { release = r; });
     const synth = vi.fn(() => gate);
@@ -189,20 +200,20 @@ describe('TtsCache: concurrent requests and damaged files', () => {
   });
 
   it('a failed synthesis is not stored: the next request synthesizes again', async () => {
-    const c = new TtsCache({ dir: cdir });
+    const c = fixtureCache({ dir: cdir });
     await expect(c.fetchOnce(K, async () => { throw new Error('upstream'); })).rejects.toThrow('upstream');
     const r = await c.fetchOnce(K, async () => blob(40));
     expect(r.hit).toBe(false);
   });
 
   it('a corrupt or partial file is ignored, removed and re-synthesized', async () => {
-    const c0 = new TtsCache({ dir: cdir });
+    const c0 = fixtureCache({ dir: cdir });
     await c0.fetchOnce(K, async () => blob(40));
     await c0.settle();
     // a file that is not an mp3 (garbage) and one that is empty (a partial write that was never renamed)
     writeFileSync(join(cdir, ttsCacheFileName(K)), Buffer.from('not audio at all'));
     writeFileSync(join(cdir, ttsCacheFileName(K2)), Buffer.alloc(0));
-    const c = new TtsCache({ dir: cdir });
+    const c = fixtureCache({ dir: cdir });
     const synth = vi.fn(async () => blob(40, 0x63));
     const r1 = await c.fetchOnce(K, synth);
     const r2 = await c.fetchOnce(K2, synth);
@@ -218,19 +229,23 @@ describe('TtsCache: concurrent requests and damaged files', () => {
 
 const AZ: TtsBody = { engine: 'azure', voice: 'zh-TW-HsiaoChenNeural', text: '你好世界', rate: 1, pitch: 1 };
 const GO: TtsBody = { engine: 'google', voice: 'ja-JP-Neural2-B', text: 'はい', rate: 1, pitch: 1 };
-const usageAt = (file: string) => new UsageStore({ file, now: () => new Date(2026, 9, 20, 12), debounceMs: 60_000 });
+const usageAt = (file: string) => {
+  const store = new UsageStore({ file, now: () => new Date(2026, 9, 20, 12), debounceMs: 60_000 });
+  stores.push(store);
+  return store;
+};
 const month = (u: UsageStore) => u.snapshot().months['2026-10'].tts;
 
 describe('answerTts: billing with the disk cache', () => {
   it('a disk hit after a restart bills nothing and counts as a cache hit', async () => {
     const usage = usageAt(join(dir, 'usage.json'));
-    const c1 = new TtsCache({ dir: cdir });
+    const c1 = fixtureCache({ dir: cdir });
     const first = await answerTts(AZ, { cache: c1, usage, synth: async () => blob(90), azureConfigured: true });
     expect(first).toMatchObject({ kind: 'audio', hit: false });
     await c1.settle();
     expect(month(usage).azure.neural).toMatchObject({ requests: 1, chars: 4, cacheHits: 0 });
 
-    const c2 = new TtsCache({ dir: cdir }); // the server restarted
+    const c2 = fixtureCache({ dir: cdir }); // the server restarted
     const synth = vi.fn(async () => blob(90));
     const second = await answerTts(AZ, { cache: c2, usage, synth, azureConfigured: true });
     expect(second).toMatchObject({ kind: 'audio', hit: true, fellBack: false });
@@ -241,10 +256,10 @@ describe('answerTts: billing with the disk cache', () => {
   it('a cached reply is served from disk even when its tier is past 90% (nothing is billed, no fallback)', async () => {
     const usage = usageAt(join(dir, 'usage.json'));
     usage.recordTts({ engine: 'google', tier: 'neural2' }, { ok: true, chars: 999_000 });
-    const c1 = new TtsCache({ dir: cdir });
+    const c1 = fixtureCache({ dir: cdir });
     await c1.fetchOnce(cacheKey(GO), async () => blob(70));
     await c1.settle();
-    const c2 = new TtsCache({ dir: cdir });
+    const c2 = fixtureCache({ dir: cdir });
     const got = await answerTts(GO, { cache: c2, usage, synth: vi.fn(async () => blob(70)), azureConfigured: false });
     expect(got).toMatchObject({ kind: 'audio', hit: true, fellBack: false, requestedTier: 'neural2' });
     expect(month(usage).google.neural2.chars).toBe(999_000);
@@ -253,7 +268,7 @@ describe('answerTts: billing with the disk cache', () => {
   it('an uncached request past 90% falls back to the next Google tier and is cached under that key', async () => {
     const usage = usageAt(join(dir, 'usage.json'));
     usage.recordTts({ engine: 'google', tier: 'neural2' }, { ok: true, chars: 950_000 });
-    const c = new TtsCache({ dir: cdir });
+    const c = fixtureCache({ dir: cdir });
     const synth = vi.fn(async () => blob(70));
     const got = await answerTts(GO, { cache: c, usage, synth, azureConfigured: false });
     expect(got).toMatchObject({ kind: 'audio', hit: false, fellBack: true, requestedTier: 'neural2' });
@@ -266,7 +281,7 @@ describe('answerTts: billing with the disk cache', () => {
 
   it('two concurrent identical requests reach the provider once and bill once', async () => {
     const usage = usageAt(join(dir, 'usage.json'));
-    const c = new TtsCache({ dir: cdir });
+    const c = fixtureCache({ dir: cdir });
     let release!: (b: Buffer) => void;
     const gate = new Promise<Buffer>((r) => { release = r; });
     const synth = vi.fn(() => gate);
@@ -282,7 +297,7 @@ describe('answerTts: billing with the disk cache', () => {
 
   it('a failed provider call is billed as a failure and leaves nothing in the cache', async () => {
     const usage = usageAt(join(dir, 'usage.json'));
-    const c = new TtsCache({ dir: cdir });
+    const c = fixtureCache({ dir: cdir });
     await expect(answerTts(AZ, { cache: c, usage, synth: async () => { throw new Error('502'); }, azureConfigured: true })).rejects.toThrow('502');
     expect(month(usage).azure.neural).toMatchObject({ requests: 1, failures: 1, chars: 0 });
     expect(c.stats().files).toBe(0);

@@ -11,6 +11,7 @@ export type ChatGptStatus = {
   /** shown only when the page is opened on the PC */
   email?: string;
   models: ChatGptModelChoice[];
+  modelStatus?: 'ready' | 'empty' | 'incompatible' | 'error';
 };
 
 /** the status of a player who is not signed in */
@@ -33,6 +34,8 @@ function readStatus(j: unknown): ChatGptStatus {
     planEnabled: o.planEnabled === true,
     ...(typeof o.email === 'string' && o.email ? { email: o.email } : {}),
     models,
+    ...(['ready', 'empty', 'incompatible', 'error'].includes(String(o.modelStatus))
+      ? { modelStatus: o.modelStatus as ChatGptStatus['modelStatus'] } : {}),
   };
 }
 

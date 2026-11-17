@@ -41,10 +41,10 @@ describe('services of a request', () => {
     expect(plan.services).toEqual([]);
   });
 
-  it('a ChatGPT model the player named that the plan lacks falls back to the first listed', async () => {
+  it('a saved ChatGPT model missing from the catalog is not silently replaced', async () => {
     const fakeGpt = { ready: () => true, models: async () => [{ slug: 'gpt-a' }, { slug: 'gpt-b' }], provider: () => ({} as never) } as never;
     const plan = await servicesFor({ providers: ['openai'], openaiModel: 'gpt-zzz' }, { root, mode: 'test', chatgpt: fakeGpt });
-    expect(plan.services[0].model).toBe('gpt-a');
+    expect(plan.services).toEqual([]);
   });
 
   it('a ChatGPT model list that throws is skipped (the other service still answers)', async () => {

@@ -302,9 +302,15 @@ export function AiServiceSection({ providers, openaiModel, claudeOk, chatgpt, on
   const claudeText = claudeOk === null ? '讀取中…' : claudeOk ? '已設定金鑰' : '未設定金鑰（在電腦的 .env.local 填 ANTHROPIC_API_KEY）';
   const chatgptText = chatgpt === null ? '讀取中…'
     : !chatgpt.signedIn ? '未登入'
-      : chatgpt.planEnabled ? `已登入${chatgpt.email ? `（${chatgpt.email}）` : ''}` : '已登入，但沒有 ChatGPT 方案的使用權，請重新登入';
+      : chatgpt.planEnabled ? `已登入${chatgpt.email ? `（${chatgpt.email}）` : ''}` : '已登入，但尚未授權 ChatGPT 方案使用權；請在電腦上重新授權';
   const models = chatgpt?.models ?? [];
-  const selectedModel = models.some((m) => m.slug === openaiModel) ? openaiModel : (models[0]?.slug ?? '');
+  const missingModel = !!openaiModel && !models.some((m) => m.slug === openaiModel);
+  const selectedModel = openaiModel || (models[0]?.slug ?? '');
+  const modelNote = !chatgpt?.signedIn || !chatgpt.planEnabled ? ''
+    : chatgpt.modelStatus === 'error' ? '模型目錄取得失敗，請重新整理後再試；已保留登入與模型選擇。'
+      : chatgpt.modelStatus === 'incompatible' ? '帳號可見模型目前均不相容於文字回覆，請檢查帳號可用模型。'
+        : chatgpt.modelStatus === 'empty' ? '此帳號目前沒有可見模型。'
+          : missingModel ? '已選模型目前不可用或不相容，請明確選擇其他模型；不會自動替換。' : '';
 
   return (
     <div className={theme === 'dark' ? 'as-ai-sec as-dark' : 'as-ai-sec'}>
@@ -329,16 +335,19 @@ export function AiServiceSection({ providers, openaiModel, claudeOk, chatgpt, on
               {id === 'openai' && (
                 <div className="as-ai-chatgpt">
                   {!localPc && chatgpt !== null && <small className="as-ai-hint">ChatGPT 只能在電腦上登入或登出</small>}
-                  {localPc && chatgpt !== null && !chatgpt.signedIn && (
+                  {localPc && chatgpt !== null && (!chatgpt.signedIn || !chatgpt.planEnabled) && (
                     <button className="as-small" disabled={busy} onClick={() => void login()}>用 ChatGPT 登入</button>
                   )}
                   {localPc && chatgpt?.signedIn && (
                     <button className="as-small" disabled={busy} onClick={() => void logout()}>登出</button>
                   )}
-                  {chatgpt?.signedIn && models.length > 0 && (
+                  {modelNote && <small className="as-ai-hint" role="status">{modelNote}</small>}
+                  {chatgpt?.signedIn && chatgpt.planEnabled && <button className="as-small" disabled={busy} onClick={onRefresh}>重新整理模型</button>}
+                  {chatgpt?.signedIn && (models.length > 0 || !!openaiModel) && (
                     <label className="as-ai-model"><span>ChatGPT 模型</span>
                       <select aria-label="ChatGPT 模型" value={selectedModel} disabled={busy}
                         onChange={(e) => onChange({ openaiModel: e.currentTarget.value })}>
+                        {missingModel && <option value={openaiModel} disabled>{openaiModel}（目前不可用）</option>}
                         {models.map((m) => <option key={m.slug} value={m.slug}>{m.label}</option>)}
                       </select></label>
                   )}

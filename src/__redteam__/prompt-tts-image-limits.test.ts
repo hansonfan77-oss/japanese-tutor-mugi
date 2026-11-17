@@ -96,13 +96,12 @@ describe('路由（providers、openaiModel）與模型', () => {
     expect(() => parseModel({ toString() { return 'claude-haiku-5-5'; } })).toThrow();
   });
 
-  it('openaiModel 不在清單內 → 退回清單第一個（注入的字串不會被送出去）', async () => {
+  it('openaiModel 不在清單內 → 不送出、不替換（注入的字串不會被送出去）', async () => {
     const stub = { ready: () => true, models: async () => [{ slug: 'gpt-5' }], provider: () => ({} as never) };
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mugi-redteam-route-'));
     try {
       const r = await servicesFor(parseRouting({ providers: ['openai'], openaiModel: 'gpt-4o"; drop table x;--' }), { root, mode: 'development', chatgpt: stub as never });
-      expect(r.services).toHaveLength(1);
-      expect(r.services[0].model).toBe('gpt-5');
+      expect(r.services).toEqual([]);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

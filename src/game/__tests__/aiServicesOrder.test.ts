@@ -1,5 +1,5 @@
 // Which services a request gets (claudeChat.servicesFor): the player's order, Claude needs its key, ChatGPT needs the signed-in
-// plan and a model (the one named when listed, else the first listed). No network: the Claude key is only read, never called,
+// plan and a model (the one named when listed, only an absent choice uses the first listed). No network: the Claude key is only read, never called,
 // and the ChatGPT service is a fake. The folder is a temporary one, so no .env.local is read.
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -71,9 +71,9 @@ describe('servicesFor', () => {
     expect(r.services.map((s) => s.id)).toEqual(['anthropic']);
   });
 
-  it('the ChatGPT model is the one named when the plan lists it, else the first listed one', async () => {
+  it('the ChatGPT model is the one named when the plan lists it, only an absent choice uses the first listed one', async () => {
     expect((await ask(['openai'], chatgptWith(), 'gpt-5.4')).services[0].model).toBe('gpt-5.4');
-    expect((await ask(['openai'], chatgptWith(), 'gpt-9-gone')).services[0].model).toBe('gpt-5.5-sol');
+    expect((await ask(['openai'], chatgptWith(), 'gpt-9-gone')).services).toEqual([]);
     expect((await ask(['openai'], chatgptWith())).services[0].model).toBe('gpt-5.5-sol');
   });
 

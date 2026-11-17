@@ -1,10 +1,10 @@
 // The ChatGPT provider (server/llm/openaiProvider.ts), offline: the request conversion, the Responses stream read (deltas,
 // completion, failure, a cut stream), the abort and the time limit, the error mapping, and the strict-schema rule for every
 // JSON schema the server sends (OpenAI's strict json_schema needs additionalProperties false and every property required).
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { CHAT_REPLY_SCHEMA, chatRequest, parseChatBody } from '../../../server/claudeChat.ts';
 import { JUDGE_SCHEMA, LOOKUP_SCHEMA, TIP_FIX_SCHEMA } from '../../../server/claudeChat.ts';
-import { OpenAIError, describeOpenAIError, openaiProvider, responsesBody, type OpenAITransport } from '../../../server/llm/openaiProvider.ts';
+import { OPENAI_MAX_OUTPUT_CHARS, OPENAI_STREAM_TIMEOUT_MS, OpenAIError, describeOpenAIError, openaiProvider, responsesBody, type OpenAITransport } from '../../../server/llm/openaiProvider.ts';
 import { reminderPrompt, systemPrompt } from '../../../server/prompts.ts';
 
 const sample = parseChatBody(JSON.stringify({
@@ -69,7 +69,7 @@ describe('request conversion (Anthropic shape → Responses shape)', () => {
       { role: 'assistant', content: 'B' },
       { role: 'user', content: `C\n\n<reminder>${reminderPrompt()}</reminder>` },
     ]);
-    expect(body.max_output_tokens).toBe(2000);
+    expect(body).not.toHaveProperty('max_output_tokens');
     expect(body.store).toBe(false);
     expect(body.stream).toBe(true);
     expect(body.text).toEqual({ format: { type: 'json_schema', name: 'mugi_reply', strict: true, schema: CHAT_REPLY_SCHEMA } });
@@ -122,7 +122,11 @@ describe('streamChat', () => {
     expect(r).toEqual({ text: '{"segments":[]}', model: 'gpt-test', stopReason: 'completed' });
     expect(s.usageSoFar()).toBeUndefined();
     expect(sent[0].path).toBe('/responses');
-    expect(JSON.parse(sent[0].body).store).toBe(false);
+    const wire = JSON.parse(sent[0].body);
+    expect(wire.store).toBe(false);
+    expect(wire.stream).toBe(true);
+    expect(wire.model).toBe('gpt-test');
+    expect(Object.keys(wire).sort()).toEqual(['input', 'instructions', 'model', 'store', 'stream', 'text']);
   });
 
   it('a failed response ends with its code (usage_limit is a limit, so the chain may move on)', async () => {
@@ -176,7 +180,7 @@ describe('complete', () => {
 describe('describeOpenAIError', () => {
   it('maps the failures to the messages the player sees (no token, no reply text)', () => {
     expect(describeOpenAIError(new OpenAIError('x', { status: 401 }))).toEqual({ status: 401, message: '請重新登入 ChatGPT' });
-    expect(describeOpenAIError(new OpenAIError('x', { status: 403 }))).toEqual({ status: 401, message: '請重新登入 ChatGPT' });
+    expect(describeOpenAIError(new OpenAIError('x', { status: 403 }))).toEqual({ status: 403, message: 'ChatGPT 方案權限或政策不允許此請求，請檢查授權與帳號限制。' });
     expect(describeOpenAIError(new OpenAIError('x', { status: 429 }))).toEqual({ status: 429, message: 'ChatGPT 額度已用完或太頻繁，請稍後再試' });
     expect(describeOpenAIError(new OpenAIError('x', { code: 'usage_limit' }))).toEqual({ status: 429, message: 'ChatGPT 額度已用完或太頻繁，請稍後再試' });
     expect(describeOpenAIError(new OpenAIError('x', { status: 503 }))).toEqual({ status: 502, message: 'OpenAI 暫時有問題，請稍後再試' });
@@ -184,5 +188,88 @@ describe('describeOpenAIError', () => {
     expect(describeOpenAIError(new OpenAIError('x', { timeout: true }))).toEqual({ status: 504, message: 'ChatGPT 回應逾時，已中止' });
     expect(describeOpenAIError(new TypeError('fetch failed'))).toEqual({ status: 502, message: '連不上 ChatGPT' });
     expect(describeOpenAIError(new Error('boom'))).toEqual({ status: 500, message: 'boom' });
+  });
+});
+
+
+describe('T1 streamed terminal events and local guards', () => {
+  it.each(['subscription_sharing_usage_limit_exceeded', 'subscription_sharing_usage_unavailable'])('%s has the same Chinese recovery before and after a delta', async (code) => {
+    for (const partial of [false, true]) {
+      const { transport } = transportWith(events([
+        ...(partial ? [{ type: 'response.output_text.delta', delta: 'partial' }] : []),
+        { type: 'response.failed', response: { error: { code } } },
+      ]));
+      const got = vi.fn();
+      const error = await openaiProvider(transport).streamChat(chatRequest(sample, 'gpt-test'), got).done.catch(e => e);
+      expect(error).toMatchObject({ code });
+      expect(!!error.partialOutput).toBe(partial);
+      expect(got).toHaveBeenCalledTimes(partial ? 1 : 0);
+      const mapped = describeOpenAIError(error);
+      expect(mapped.status).toBe(code.endsWith('exceeded') ? 429 : 503);
+      expect(mapped.message).toContain(code.endsWith('exceeded') ? '方案使用已達限制' : '暫時無法確認');
+    }
+  });
+
+  it.each([
+    [[{ type: 'response.incomplete', response: { incomplete_details: { reason: 'max_output_tokens' } } }]],
+    [[{ type: 'error', code: 'subscription_sharing_usage_unavailable' }]],
+    [[]],
+  ])('does not succeed with partial text and terminal events %j', async (terminal) => {
+    const { transport } = transportWith(events([{ type: 'response.output_text.delta', delta: 'partial' }, ...terminal]));
+    await expect(openaiProvider(transport).complete({ model: 'gpt-test', max_tokens: 10, system: '', messages: [] })).rejects.toMatchObject({ partialOutput: true });
+  });
+
+  it('requires a complete terminal event, not DONE or a truncated completed event', async () => {
+    for (const suffix of ['data: [DONE]\n\n', 'data: {"type":"response.completed"}']) {
+      const { transport } = transportWith(events([{ type: 'response.output_text.delta', delta: 'x' }]) + suffix);
+      await expect(openaiProvider(transport).streamChat(chatRequest(sample, 'gpt-test'), () => {}).done).rejects.toThrow('連線中斷');
+    }
+  });
+
+  it('cancels a locked pending reader after output without waiting for the global timeout', async () => {
+    const cancel = vi.fn();
+    let emitted!: () => void;
+    const firstDelta = new Promise<void>(resolve => { emitted = resolve; });
+    const transport: OpenAITransport = async () => new Response(new ReadableStream({
+      start(c) { c.enqueue(new TextEncoder().encode(events([{ type: 'response.output_text.delta', delta: 'partial' }]))); }, cancel,
+    }));
+    const s = openaiProvider(transport).streamChat(chatRequest(sample, 'gpt-test'), emitted);
+    const rejected = expect(s.done).rejects.toMatchObject({ name: 'AbortError', partialOutput: true });
+    await firstDelta;
+    s.abort();
+    await rejected;
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it('bounds output locally and cancels upstream without reporting success', async () => {
+    const cancel = vi.fn();
+    const transport: OpenAITransport = async () => new Response(new ReadableStream({
+      start(c) { c.enqueue(new TextEncoder().encode(events([
+        { type: 'response.output_text.delta', delta: 'a'.repeat(OPENAI_MAX_OUTPUT_CHARS) },
+        { type: 'response.output_text.delta', delta: 'overflow' },
+        { type: 'response.completed' },
+      ]))); }, cancel,
+    }));
+    const delta = vi.fn();
+    await expect(openaiProvider(transport).streamChat(chatRequest(sample, 'gpt-test'), delta).done)
+      .rejects.toMatchObject({ code: 'local_output_limit', partialOutput: true });
+    expect(delta).toHaveBeenCalledOnce();
+    expect(delta.mock.calls[0][0]).toHaveLength(OPENAI_MAX_OUTPUT_CHARS);
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it.each(['chat', 'complete'])('%s has a default timeout even while its reader is locked', async (kind) => {
+    vi.useFakeTimers();
+    try {
+      const cancel = vi.fn();
+      const transport: OpenAITransport = async () => new Response(new ReadableStream({ start() {}, cancel }));
+      const p = openaiProvider(transport);
+      const done = kind === 'chat' ? p.streamChat(chatRequest(sample, 'gpt-test'), () => {}).done
+        : p.complete({ model: 'gpt-test', max_tokens: 10, system: '', messages: [] });
+      const rejected = expect(done).rejects.toMatchObject({ timeout: true });
+      await vi.advanceTimersByTimeAsync(OPENAI_STREAM_TIMEOUT_MS);
+      await rejected;
+      expect(cancel).toHaveBeenCalledOnce();
+    } finally { vi.useRealTimers(); }
   });
 });

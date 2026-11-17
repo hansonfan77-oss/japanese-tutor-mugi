@@ -1,3 +1,4 @@
+import { browserSpeechAllowed } from '../game/browserRuntime';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 // Web Speech API (Chrome / Edge / Safari; Safari exposes it as webkitSpeechRecognition). Only the members used here are
@@ -80,6 +81,7 @@ export function speechTrace(): string[] { return traceBuf.slice(); }
 
 /** the recognition constructor of this browser, or null when there is none (iOS Home Screen apps may lack it) */
 export function speechCtor(w: unknown = typeof window === 'undefined' ? undefined : window): SpeechCtor | null {
+  if (!browserSpeechAllowed()) return null;
   const ww = w as { SpeechRecognition?: SpeechCtor; webkitSpeechRecognition?: SpeechCtor } | undefined;
   return ww?.SpeechRecognition ?? ww?.webkitSpeechRecognition ?? null;
 }

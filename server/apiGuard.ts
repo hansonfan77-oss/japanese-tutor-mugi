@@ -181,8 +181,8 @@ export function browserHeadersRefusal(headers: GuardHeaders): GuardResult | null
   return null;
 }
 
-/** Decides whether an /api request may run. Pure: no I/O. */
-export function checkApiRequest(req: GuardRequest, opts: GuardOptions = {}): GuardResult {
+/** Host and socket/pairing boundary shared by APIs and public document navigation. Pure: no I/O. */
+export function checkRequestHost(req: GuardRequest, opts: GuardOptions = {}): GuardResult {
   const h = req.headers;
   const hostHeader = header(h, 'host');
   const hostName = hostHeader === undefined ? null : hostNameOf(hostHeader);
@@ -193,6 +193,14 @@ export function checkApiRequest(req: GuardRequest, opts: GuardOptions = {}): Gua
   if ((!isLoopbackSocket(req) || isRawIpName(hostName)) && !pairOk(h, opts.pairToken)) {
     return { ok: false, status: 403, message: PAIR_REQUIRED_MESSAGE, code: 'pair_required' };
   }
+  return { ok: true };
+}
+
+/** Decides whether an /api request may run. Public navigation exceptions do not apply here. */
+export function checkApiRequest(req: GuardRequest, opts: GuardOptions = {}): GuardResult {
+  const host = checkRequestHost(req, opts);
+  if (!host.ok) return host;
+  const h = req.headers;
   const browser = browserHeadersRefusal(h);
   if (browser) return browser;
   const method = (req.method ?? 'GET').toUpperCase();

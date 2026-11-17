@@ -208,7 +208,7 @@ describe('設定路由（臨時 .env.local）', () => {
     const before = fs.readFileSync(p, 'utf8');
     // through guardApi, as the dev server mounts it (the cross-site and Host refusals are the guard's, not the route's)
     const guarded = guardApi((req, res) => handleSettingsApi(req, res, deps(p)), { allowedHosts: [] });
-    for (const headers of [{ host: 'evil.com' }, { host: '192.168.1.10:3110' }, { host: '127.0.0.1:3110', 'sec-fetch-site': 'cross-site' }]) {
+    for (const headers of [{ host: 'evil.com' }, { host: '192.168.1.10:3110' }, { host: '127.0.0.1:3110', 'sec-fetch-site': 'cross-site' }] as Record<string, string>[]) {
       const { res, out } = fakeRes();
       await guarded(fakeReq('/keys', 'POST', headers, { googleKey: 'hacked' }), res);
       expect(out.status).toBe(403);

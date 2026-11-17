@@ -12,3 +12,6 @@ createRoot(document.getElementById('root')!).render(
     <App />
   </StrictMode>,
 )
+
+import { registerPwa } from './pwa';
+void registerPwa();

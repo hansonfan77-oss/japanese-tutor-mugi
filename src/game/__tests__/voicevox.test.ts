@@ -50,14 +50,29 @@ function upEngine(extra: { query?: Record<string, unknown> } = {}) {
 const BASE = 'http://127.0.0.1:50021';
 
 let dir: string;
+const pendingCaches: TtsCache[] = [];
+const pendingStores: UsageStore[] = [];
+function trackedCache(options: ConstructorParameters<typeof TtsCache>[0]) {
+  const cache = new TtsCache(options); pendingCaches.push(cache); return cache;
+}
+function trackedStore(options: ConstructorParameters<typeof UsageStore>[0]) {
+  const store = new UsageStore(options); pendingStores.push(store); return store;
+}
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'mugi-tutor-voicevox-'));
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
 });
-afterEach(() => {
-  vi.restoreAllMocks();
-  rmSync(dir, { recursive: true, force: true });
+afterEach(async () => {
+  // Cache writes are asynchronous; deleting their directory first races with writeFile/mkdir.
+  // UsageStore has a debounced write too. Drain both owners before removing the fixture.
+  try {
+    await Promise.all(pendingCaches.map(cache => cache.settle()));
+    for (const store of pendingStores) store.flush();
+    rmSync(dir, { recursive: true, force: true });
+  } finally {
+    pendingCaches.length = 0; pendingStores.length = 0; vi.restoreAllMocks();
+  }
 });
 
 const NONE: TtsConfig = { azureKey: '', azureRegion: '', googleKey: '' };
@@ -195,12 +210,12 @@ describe('VOICEVOX through answerTts: cache, WAV file kind, usage, fallback', ()
   const VV: TtsBody = { engine: 'voicevox', voice: '8', text: 'こんにちは、今日は晴れですね。', rate: 1, pitch: 1 };
   const usageFile = () => join(dir, '.usage', 'usage.json');
   const at = new Date(2026, 9, 20, 12);
-  const store = () => new UsageStore({ file: usageFile(), now: () => at, debounceMs: 60_000 });
+  const store = () => trackedStore({ file: usageFile(), now: () => at, debounceMs: 60_000 });
   const cacheDir = () => join(dir, '.tts-cache');
 
   it('synthesizes, stores the WAV on disk under a .wav name, and a repeat is a cache hit', async () => {
     const e = upEngine();
-    const cache = new TtsCache({ dir: cacheDir() });
+    const cache = trackedCache({ dir: cacheDir() });
     const usage = store();
     const synth = (use: TtsBody) => voicevoxSynthesize(BASE, use.voice, use.text, e.f);
 
@@ -217,17 +232,17 @@ describe('VOICEVOX through answerTts: cache, WAV file kind, usage, fallback', ()
     expect(names).toEqual([ttsCacheFileName(cacheKey(VV), 'wav')]);
     expect(names[0].endsWith('.wav')).toBe(true);
 
-    const again = await answerTts(VV, { cache: new TtsCache({ dir: cacheDir() }), usage, synth: vi.fn(synth), azureConfigured: false });
+    const again = await answerTts(VV, { cache: trackedCache({ dir: cacheDir() }), usage, synth: vi.fn(synth), azureConfigured: false });
     expect(again.kind === 'audio' && again.hit).toBe(true);
     expect(e.calls.filter((c) => c.url.includes('/synthesis'))).toHaveLength(1);
   });
 
   it('a WAV file is found only under the wav name (an mp3 lookup of the same key misses)', async () => {
-    const cache = new TtsCache({ dir: cacheDir() });
+    const cache = trackedCache({ dir: cacheDir() });
     await cache.store(cacheKey(VV), WAV, 'wav');
     await cache.settle();
-    expect(await new TtsCache({ dir: cacheDir() }).lookup(cacheKey(VV), 'wav')).toEqual(WAV);
-    expect(await new TtsCache({ dir: cacheDir() }).lookup(cacheKey(VV), 'mp3')).toBeUndefined();
+    expect(await trackedCache({ dir: cacheDir() }).lookup(cacheKey(VV), 'wav')).toEqual(WAV);
+    expect(await trackedCache({ dir: cacheDir() }).lookup(cacheKey(VV), 'mp3')).toBeUndefined();
   });
 
   it('the WAV check recognizes RIFF/WAVE only', () => {
@@ -241,7 +256,7 @@ describe('VOICEVOX through answerTts: cache, WAV file kind, usage, fallback', ()
 
   it('counts requests and characters under voicevox, with no allowance and no fallback', async () => {
     const e = upEngine();
-    const cache = new TtsCache({ dir: cacheDir() });
+    const cache = trackedCache({ dir: cacheDir() });
     const usage = store();
     const synth = (use: TtsBody) => voicevoxSynthesize(BASE, use.voice, use.text, e.f);
     await answerTts(VV, { cache, usage, synth, azureConfigured: false });
@@ -257,7 +272,7 @@ describe('VOICEVOX through answerTts: cache, WAV file kind, usage, fallback', ()
   });
 
   it('when the engine is down, the request fails with voicevox_down and the failure is counted', async () => {
-    const cache = new TtsCache({ dir: cacheDir() });
+    const cache = trackedCache({ dir: cacheDir() });
     const usage = store();
     const e = fakeEngine(() => undefined);
     const synth = (use: TtsBody) => voicevoxSynthesize(BASE, use.voice, use.text, e.f);
@@ -283,7 +298,7 @@ describe('usage store: months saved before VOICEVOX', () => {
     const at = new Date(2026, 9, 20, 12);
     // written by an older build: no voicevox key in the month
     writeFileSync(file, JSON.stringify({ version: 1, months: { '2026-10': { tts: { google: {}, azure: {} }, claude: {} } } }));
-    const s = new UsageStore({ file, now: () => at, debounceMs: 60_000 });
+    const s = trackedStore({ file, now: () => at, debounceMs: 60_000 });
     expect(s.snapshot().months['2026-10'].tts).toEqual({ google: {}, azure: {} });
     s.recordTts({ engine: 'voicevox', tier: 'voicevox' }, { ok: true, chars: 5 });
     expect(s.snapshot().months['2026-10'].tts.voicevox?.voicevox.chars).toBe(5);
@@ -292,7 +307,7 @@ describe('usage store: months saved before VOICEVOX', () => {
 });
 
 // skipped unless a VOICEVOX engine answers on the default address (this PC only)
-const engineUp = await fetch(`${BASE}/version`, { signal: AbortSignal.timeout(800) }).then((r) => r.ok, () => false);
+const engineUp = process.env.MUGI_TEST_VOICEVOX === '1' && await fetch(`${BASE}/version`, { signal: AbortSignal.timeout(800) }).then((r) => r.ok, () => false);
 
 describe('the optional integration test against the real local engine', () => {
   it.skipIf(!engineUp)('synthesizes a Japanese line at style 8 into a RIFF/WAVE file', async () => {

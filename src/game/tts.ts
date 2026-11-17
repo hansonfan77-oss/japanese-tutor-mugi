@@ -1,3 +1,4 @@
+import { browserSpeechAllowed } from './browserRuntime';
 // Her voice: text-to-speech on the browser's speechSynthesis, driven by the reply bus (game/replyBus.ts).
 //
 // Replies arrive as start / delta / done / error events. A reply is cut into sentences (。！？!? … and newlines), each
@@ -124,7 +125,7 @@ export function onTtsSettings(l: (s: TtsSettings) => void) {
 }
 
 export const ttsSupported = (): boolean =>
-  typeof window !== 'undefined' && 'speechSynthesis' in window && typeof SpeechSynthesisUtterance !== 'undefined';
+  browserSpeechAllowed() && typeof window !== 'undefined' && 'speechSynthesis' in window && typeof SpeechSynthesisUtterance !== 'undefined';
 /** cloud voices need fetch and the Web Audio API (the audio context itself may still be locked until a tap) */
 const cloudSupported = (): boolean =>
   typeof window !== 'undefined' && typeof fetch === 'function' &&
@@ -134,7 +135,7 @@ const langAvailable = (lang: Lang): boolean => (settings[lang].engine === 'brows
 /** at least one language can be spoken */
 export const ttsAvailable = (): boolean => langAvailable('zh') || langAvailable('ja');
 /** replies are spoken: the setting is on and the chosen engine can speak */
-export const ttsActive = (): boolean => settings.on && ttsAvailable();
+export const ttsActive = (): boolean => browserSpeechAllowed() && settings.on && ttsAvailable();
 
 // ---------- sentences ----------
 const SENTENCE_END = /[^。！？!?…\n]*[。！？!?…\n]+/g;
@@ -409,6 +410,7 @@ export function onSpeaking(l: (busy: boolean) => void) {
 const live = new Set<SpeechSynthesisUtterance>(); // keeps utterances alive until they end (iOS drops callbacks otherwise)
 const browserIo: SpeechIo = {
   speak(u) {
+    if (!browserSpeechAllowed()) { u.onDone(); return; }
     const synth = window.speechSynthesis;
     const ut = new SpeechSynthesisUtterance(u.text);
     ut.lang = u.lang === 'ja' ? 'ja-JP' : 'zh-TW';
@@ -464,7 +466,7 @@ const cloudIo = createCloudIo({
 
 /** the engine the queue hands each sentence to */
 const dispatchIo: SpeechIo = {
-  speak: (u) => cloudIo.speak(u),
+  speak: (u) => { if (!browserSpeechAllowed()) { u.onDone(); return; } cloudIo.speak(u); },
   cancel: () => { browserIo.cancel(); cloudIo.cancel(); },
 };
 
@@ -535,6 +537,7 @@ export function stopSpeaking() {
 const SAMPLE: Record<Lang, string> = { zh: '你好，我是你的日語家教，今天想聊什麼呢？', ja: 'こんにちは、今日は何を話しましょうか。' };
 /** speak a sample line with the chosen voice, rate and pitch (the settings sheet's 試聽 button) */
 export function previewVoice(lang: Lang) {
+  if (!browserSpeechAllowed()) return;
   if (settings[lang].engine === 'browser' && !ttsSupported()) return;
   queue.stop();
   queue.enqueue(SAMPLE[lang], lang);

@@ -353,3 +353,11 @@ describe('the model and persona settings (phone)', () => {
     expect(await claudeStatus()).toEqual({ ok: true, model: 'claude-haiku-5-5', personas: { Mugi: '元氣' } });
   });
 });
+
+// These route tests do not test Windows DPAPI. Auth/credential suites cover it with their own fixtures.
+vi.mock('../../../server/openai/credentials.ts', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../server/openai/credentials.ts')>();
+  return { ...actual, defaultProtector: () => null,
+    openCredentialStore: () => ({ data: { v: 1, hostId: 'route-test-only', account: null }, save() {} }),
+  };
+});

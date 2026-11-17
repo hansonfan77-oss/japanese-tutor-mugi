@@ -70,7 +70,7 @@ describe('the callback and the shared completion', () => {
   });
 
   it('a real sign-in finished by the callback on this PC signs the account in; the status seen from a phone hides the e-mail', async () => {
-    const service = createChatGpt({ store: memoryStore(), oauth: fakeOAuth(), now: () => 1_000_000 });
+    const service = createChatGpt({ store: memoryStore(), oauth: fakeOAuth(), fetcher: async () => Response.json({ models: [] }), now: () => 1_000_000 });
     const url = await service.beginLogin('http://127.0.0.1:3004/auth/callback');
     const cb = fakeRes();
     await handleAuthCallback(fakeReq(`/auth/callback?state=${stateOf(url)}&code=OK&client_id=client_real`, 'GET', { host: '127.0.0.1:3004' }), cb.res, service);

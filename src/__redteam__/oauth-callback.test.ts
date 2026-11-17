@@ -145,7 +145,7 @@ describe('GET /auth/callback：只允許本機，錯誤頁面會跳脫 HTML', ()
     const { svc, seen } = service();
     await svc.beginLogin('http://127.0.0.1:3110/auth/callback');
     const state = stateOf(seen);
-    for (const headers of [{ host: 'evil.com' }, { host: '127.0.0.1:3110', 'x-forwarded-for': '1.2.3.4' }, { host: '127.0.0.1:3110', 'tailscale-user-login': 'me@x' }]) {
+    for (const headers of [{ host: 'evil.com' }, { host: '127.0.0.1:3110', 'x-forwarded-for': '1.2.3.4' }, { host: '127.0.0.1:3110', 'tailscale-user-login': 'me@x' }] as Record<string, string>[]) {
       const { res, out } = fakeRes();
       await handleAuthCallback(fakeReq(`/auth/callback?state=${state}&code=c`, 'GET', headers), res, svc);
       expect(out.status).toBe(403);

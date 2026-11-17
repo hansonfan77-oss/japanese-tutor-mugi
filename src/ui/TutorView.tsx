@@ -3,6 +3,7 @@
 // 速查, the mic and the voice loop are the shared pieces. Settings live under their own key (game/tutor.ts); each character has its
 // own chat history and picture, and her voice (game/characterVoice) is handed to the speech queue.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { browserSpeechAllowed } from '../game/browserRuntime';
 import type { ChatLine } from '../game/chatTypes';
 import { replayText } from '../game/replay';
 import { nextPocketTopic } from '../game/pocketTopics';
@@ -441,7 +442,7 @@ export default function TutorView() {
           inputRef={inputRef} value={input}
           onChange={(v) => { const t = clipCodePoints(v, CHAT_INPUT_MAX_CHARS); dictBase.current = t; setInput(t); }}
           maxChars={CHAT_INPUT_MAX_CHARS}
-          placeholder={ready ? `和${name}練習…` : '需要金鑰'}
+          placeholder={ready ? `和${name}練習…` : (!browserSpeechAllowed() ? '驗收模式：AI 已停用' : '需要金鑰')}
           ghostHint={`和${name}練習…`}
           disabled={!ready}
           onFocus={() => { keyboard.onFocus(); inputFocused.current = true; setChatOpen(true); }}
@@ -458,7 +459,7 @@ export default function TutorView() {
             {streamText && <li className="her">{rubyNodes(streamText)}</li>}
           </>}
           notes={[
-            !ready && claude !== null && '需要 AI 服務：請到設定的「AI 服務」設定 Claude 金鑰，或登入 ChatGPT',
+            !ready && claude !== null && (!browserSpeechAllowed() ? '驗收模式不進行 AI 對話，請使用內建話題與人物設定。' : '需要 AI 服務：請到設定的「AI 服務」設定 Claude 金鑰，或登入 ChatGPT'),
             note || voice.note || (mic.listening ? `聆聽中…（${sttLang === 'ja-JP' ? '日文' : '中文'}）` : ''),
           ]}
           pill={voice.active ? { phase: voice.phase, label: VOICE_LABEL[voice.phase], onStop: voice.stop } : undefined}

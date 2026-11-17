@@ -2,6 +2,7 @@
 param([string]$SourceNodeHome = '')
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot/Tools.ps1"
+. "$PSScriptRoot/Runtime.ps1"
 $testRoot = Join-Path ([System.IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString('N'))
 $nodeHome = Join-Path $testRoot 'Node 24 ZIP with spaces'
 $checkout = Join-Path $testRoot 'Acceptance checkout'

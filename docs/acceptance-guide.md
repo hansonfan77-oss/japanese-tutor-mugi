@@ -151,3 +151,28 @@ powershell.exe -NoProfile -File "$repo\scripts\windows\Stop.ps1" -Mode Acceptanc
 更新仍用上一節停止 → fast-forward 更新 → Install 重建 → Start 流程。PowerShell 腳本需使用每個子程序的 `-ExecutionPolicy RemoteSigned`，不變更系統永久執行原則；多步操作以 `& { ... }` 包住並檢查每個原生命令的 `$LASTEXITCODE`，任何一步失敗即停止。更新後請驗收桌面啟動、移到背景再返回，以及至少兩次「從最近使用的 App 滑掉 → 點原桌面圖示」。不需要重裝 PWA 或清除瀏覽器資料；實機結果待使用者回報。
 
 瀏覽器版本差異：雲端 Chromium 156 的 worker 轉送為 `empty`；CI Chrome 可保留 `document`。瀏覽器回歸接受這兩種合法值，並要求 `response.fromServiceWorker() === true` 證明重開確實經 worker。HTTP 回歸則固定測 `empty`，不因 CI 瀏覽器保留 `document` 而漏測本次修補。
+
+## 11. 桌面一鍵啟動／停止（Acceptance）
+
+完成 Install/build 後，執行一次 `scripts/windows/Install-Shortcuts.ps1`，帶入與 Install 相同的 `-NodeHome`、`-AcceptanceRoot`，以及啟動時使用的精確 `-AllowedHost`。例如（請替換路徑／Host）：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned `
+  -File 'C:\Mugi Acceptance\scripts\windows\Install-Shortcuts.ps1' `
+  -NodeHome 'C:\MugiTools\node-v24.22.2-win-x64' `
+  -AcceptanceRoot 'C:\Mugi Acceptance Data' `
+  -AllowedHost 'your-pc.your-tailnet.ts.net'
+```
+
+此步驟不啟動服務、不重新安裝依賴，只在目前使用者的 Windows 桌面建立：
+
+- **Mugi Start (Acceptance)**：啟動獨立、最小化的監督視窗；確認 health 及 runtime 都是 Acceptance，且 `externalServices=false`、`browserSpeech=false` 才顯示 ready。啟動提示視窗隨後關閉，最小化的伺服器視窗須保留。重複點 Start 若同一個已確認身分的監督程序健康，直接告知已在執行；不啟動第二份。
+- **Mugi Stop (Acceptance)**：沿用 Stop.ps1 的合作式停止、PID／建立時間／命令列身分驗證；停止後不會被監督程序再拉起。不影響其他 Node 或 Tailscale。已停止時再次點擊亦可。
+
+失敗會保留提示視窗，按 Enter 才關閉；不清除設定、不退回 Normal，也不自動殺掉佔用 3006 的其他程式。啟動逾時時，原監督視窗可能仍在嘗試啟動：查看該視窗與 AcceptanceRoot/runtime 日誌，或使用 Stop。捷徑使用 `-File` 與逐參數 Windows 引號，不將路徑拼入 `-Command`；只有該 PowerShell 子程序使用 RemoteSigned，不改永久執行原則、PATH、防火牆或系統服務。群組原則若禁止執行，會照常拒絕，沒有 Bypass 備援。
+
+小 PC 重開機後：登入 Windows → 點 Start → 等 ready → 手機確認 Tailscale 已連線 → 開啟 Mugi。這一版是手動一鍵操作，不是開機自動啟動；也不修改休眠設定或自動開啟手機 VPN。
+
+捷徑記住目前 checkout、Node ZIP、AcceptanceRoot 與 Host。移動資料夾或更換 Node 路徑後，停止服務並用新參數重新執行 Install-Shortcuts；同一 checkout 的受管捷徑可以更新，遇到同名非受管捷徑則拒絕覆寫。若要撤除，只刪掉這兩個桌面捷徑，資料與服務安裝不受影響。更新程式仍走 Stop → git fast-forward → 必要時 Install/build → Start；捷徑不會自動 git pull、更新套件或開啟付費服務。
+
+Windows CI 在隨機測試目錄產生真正的 .lnk，檢查目標與參數，再用捷徑的實際命令執行 Start、重複 Start、Stop、重複 Stop，確認無關 Node 存活及驗收隔離旗標。兩種 PowerShell 皆測試；不寫入 runner 真正桌面。使用者的小 PC 桌面圖示、重開機後操作及手機連線仍待實機確認。

@@ -58,7 +58,7 @@ try {
     $sourceRoot = (Resolve-Path "$PSScriptRoot/../..").Path
     $fixtureScripts = Join-Path $checkout 'scripts/windows'
     New-Item -ItemType Directory -Force $fixtureScripts | Out-Null
-    foreach ($name in @('Install.ps1', 'Start.ps1', 'Stop.ps1', 'Runtime.ps1', 'Tools.ps1')) { Copy-Item (Join-Path $PSScriptRoot $name) (Join-Path $fixtureScripts $name) }
+    foreach ($name in @('Install.ps1', 'Start.ps1', 'Stop.ps1', 'Runtime.ps1', 'Tools.ps1', 'ShortcutTools.ps1', 'Desktop.ps1', 'Install-Shortcuts.ps1')) { Copy-Item (Join-Path $PSScriptRoot $name) (Join-Path $fixtureScripts $name) }
     Copy-Item (Join-Path $sourceRoot 'dist') (Join-Path $checkout 'dist') -Recurse
     Copy-Item (Join-Path $sourceRoot 'dist-server') (Join-Path $checkout 'dist-server') -Recurse
     New-Item -ItemType Junction -Path (Join-Path $checkout 'node_modules') -Target (Join-Path $sourceRoot 'node_modules') | Out-Null
@@ -81,8 +81,64 @@ try {
     Assert-Check ($supervisor.WaitForExit(10000)) 'actual supervisor stops cooperatively'
     Assert-Check (!$unrelated.HasExited) 'other Node process survives Stop'
     Assert-Check (!(Test-Path (Join-Path $data 'runtime/server.json'))) 'owned control records cleaned after stop'
+    # Desktop links use exact literal paths (including spaces and apostrophes), never generated -Command code.
+    . (Join-Path $fixtureScripts 'ShortcutTools.ps1')
+    Assert-Check ((ConvertTo-MugiArgument "C:\A folder's\") -eq '"C:\A folder''s\\"') 'trailing slash and apostrophe quoted safely'
+    Assert-Rejected { ConvertTo-MugiArgument 'bad"argument' } 'embedded quote refused'
+    foreach ($badHost in @('*.ts.net', 'https://mugi.example', 'mugi.example:443', 'host; exit')) {
+        Assert-Rejected { Assert-MugiShortcutHost $badHost } 'invalid shortcut Host refused'
+    }
+    $desktop = Join-Path $testRoot "Desktop user's shortcuts"
+    New-Item -ItemType Directory $desktop | Out-Null
+    $installer = Join-Path $fixtureScripts 'Install-Shortcuts.ps1'
+    & $installer -NodeHome $nodeHome -AcceptanceRoot $data -AllowedHost 'mugi.example.ts.net' -DesktopDirectory $desktop
+    & $installer -NodeHome $nodeHome -AcceptanceRoot $data -AllowedHost 'mugi.example.ts.net' -DesktopDirectory $desktop
+    Assert-Check (@(Get-ChildItem $desktop -Filter '*.lnk').Count -eq 2) 'two shortcuts, reinstall is idempotent'
+    $wsh = New-Object -ComObject WScript.Shell
+    $startLink = $wsh.CreateShortcut((Join-Path $desktop 'Mugi Start (Acceptance).lnk'))
+    $stopLink = $wsh.CreateShortcut((Join-Path $desktop 'Mugi Stop (Acceptance).lnk'))
+    Assert-Check ($startLink.TargetPath -eq (Get-MugiPowerShell)) 'shortcut uses Windows PowerShell explicitly'
+    Assert-Check ($startLink.WorkingDirectory -eq $checkout) 'shortcut belongs to this checkout'
+    Assert-Check ($startLink.Arguments.Contains('"RemoteSigned"') -and !$startLink.Arguments.Contains('Bypass') -and !$startLink.Arguments.Contains('-Command')) 'per-process policy, no command interpolation'
+    Assert-Check ($startLink.Arguments.Contains($nodeHome) -and $startLink.Arguments.Contains($data) -and $startLink.Arguments.Contains('mugi.example.ts.net')) 'shortcut retains explicit paths and Host'
+    Assert-Check (!$stopLink.Arguments.Contains('-NodeHome')) 'Stop does not depend on Node ZIP presence'
+    function Invoke-TestShortcut($Link) {
+        $errPath = Join-Path $testRoot 'desktop-error.txt'
+        $p = Start-Process $Link.TargetPath -ArgumentList ($Link.Arguments + ' -NonInteractive') -PassThru -RedirectStandardOutput (Join-Path $testRoot 'desktop-out.txt') -RedirectStandardError $errPath
+        try {
+            if (!$p.WaitForExit(60000)) { throw 'Desktop launcher test timed out' }
+            if ($p.ExitCode -ne 0) { throw (Get-Content (Join-Path $testRoot 'desktop-out.txt') -Raw) }
+        } finally { $p.Dispose() }
+    }
+    Invoke-TestShortcut $startLink
+    Assert-Check (Test-MugiAcceptanceHealth) 'desktop Start launches healthy Acceptance server with speech/services blocked'
+    $firstHost = Read-MugiRecord (Join-Path $data 'runtime/host.json')
+    $firstServer = Read-MugiRecord (Join-Path $data 'runtime/server.json')
+    Invoke-TestShortcut $startLink
+    Assert-Check ((Read-MugiRecord (Join-Path $data 'runtime/host.json')).Pid -eq $firstHost.Pid) 'duplicate desktop Start retains supervisor'
+    Assert-Check ((Read-MugiRecord (Join-Path $data 'runtime/server.json')).Pid -eq $firstServer.Pid) 'duplicate desktop Start retains Node child'
+    Invoke-TestShortcut $stopLink
+    Invoke-TestShortcut $stopLink
+    Assert-Check (!(Test-Path (Join-Path $data 'runtime/server.json'))) 'desktop Stop and repeated Stop cleanly finish'
+    Assert-Check (!$unrelated.HasExited) 'desktop Stop preserves unrelated Node'
+    $occupied = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 3006)
+    try {
+        $occupied.Start()
+        Assert-Rejected { Invoke-TestShortcut $startLink } 'desktop Start reports port collision instead of claiming ready'
+        Assert-Check (!$unrelated.HasExited) 'failed desktop Start preserves unrelated Node'
+        Assert-Check (!(Test-Path (Join-Path $data 'runtime/server.json'))) 'failed desktop Start leaves no owned server'
+    } finally { $occupied.Stop() }
+    Assert-Check ($env:PATH -eq $priorPath) 'shortcut install leaves process PATH unchanged'
+    # Refuse an unrelated shortcut, without overwriting it or the other link.
+    $startLink.Description = 'user-owned sentinel'; $startLink.Save()
+    Assert-Rejected { & $installer -NodeHome $nodeHome -AcceptanceRoot $data -DesktopDirectory $desktop } 'unrelated shortcut preserved'
+    Assert-Check ($wsh.CreateShortcut($startLink.FullName).Description -eq 'user-owned sentinel') 'unrelated shortcut is not overwritten'
+    foreach ($obj in @($startLink, $stopLink, $wsh)) { $null = [Runtime.InteropServices.Marshal]::FinalReleaseComObject($obj) }
     Write-Host "PASS: $script:checks ZIP toolchain and layout checks on PowerShell $($PSVersionTable.PSVersion)."
 } finally {
+    if (Test-Path (Join-Path $data 'runtime/host.json')) {
+        try { & (Join-Path $checkout 'scripts/windows/Stop.ps1') -AcceptanceRoot $data } catch { }
+    }
     if ($supervisor -and !$supervisor.HasExited) {
         try { & (Join-Path $checkout 'scripts/windows/Stop.ps1') -AcceptanceRoot $data } catch { }
         if (!$supervisor.HasExited) { $supervisor.Kill(); $null = $supervisor.WaitForExit(10000) }

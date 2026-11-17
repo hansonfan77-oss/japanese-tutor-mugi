@@ -2,7 +2,7 @@
 // (game/tutorFace.ts TutorFaceClock) that reads the voice bus every 40 ms and only re-renders when what is drawn changes.
 // She is faceless: the body is the whole figure, the mouth overlays are the only thing that moves.
 import { useEffect, useRef, useState, type CSSProperties, type Dispatch, type SetStateAction } from 'react';
-import { TutorFaceClock, mouthPlacement, overlayFile, portraitPlacement, type TutorArt, type TutorFrame } from '../game/tutorFace';
+import { TutorFaceClock, mouthPlacement, overlayFile, portraitPlacement, type TutorArt, type TutorFaceInput, type TutorFrame } from '../game/tutorFace';
 import { voiceLevel, voicePlaying, voiceViseme } from '../game/voiceBus';
 import type { ZoomState } from '../game/tutorZoom';
 import type { CustomPortrait } from '../game/customArt';
@@ -59,7 +59,9 @@ export function detectBackdrop(url: string): Promise<boolean> {
 export function TutorPortrait(props: { art: TutorArt | null; artDir: string; label: string;
   zoom: { state: ZoomState; set: Dispatch<SetStateAction<ZoomState>>; range?: FigureZoomRange }; custom?: CustomPortrait | null; anchor?: FigureAnchor | null;
   /** an added character with no picture yet: a silhouette stands in her place */
-  placeholder?: boolean }) {
+  placeholder?: boolean;
+  /** An isolated practice portrait can supply its own playback clock. */
+  faceInput?: (now: number) => TutorFaceInput }) {
   const { art, label, artDir, zoom, custom = null, anchor = null, placeholder = false } = props;
   const boxRef = useRef<HTMLDivElement>(null);
   useFigureZoom(boxRef, zoom.state, zoom.set, zoom.range);
@@ -72,7 +74,8 @@ export function TutorPortrait(props: { art: TutorArt | null; artDir: string; lab
   useEffect(() => {
     const clock = new TutorFaceClock(performance.now(), { takes: art?.takes });
     const id = setInterval(() => {
-      const next = clock.frame(performance.now(), {
+      const now = performance.now();
+      const next = clock.frame(now, props.faceInput?.(now) ?? {
         speaking: voicePlaying(),
         cue: voiceViseme(),
         level: voiceLevel(),
@@ -82,7 +85,7 @@ export function TutorPortrait(props: { art: TutorArt | null; artDir: string; lab
       setFrame((prev) => (prev.closed === next.closed && sameMouth(prev.mouth, mouth) ? prev : { closed: next.closed, mouth }));
     }, TICK_MS);
     return () => clearInterval(id);
-  }, [art]);
+  }, [art, props.faceInput]);
 
   // preload the overlays, so a new mouth shape never waits for a download
   useEffect(() => { if (art) preloadTutorArt(art, dir); }, [art, dir]);

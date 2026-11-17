@@ -1,0 +1,49 @@
+.cafe-entry, .cafe-practice button {
+  min-height: 44px; padding: 8px 15px; border-radius: 12px; font-weight: 650;
+}
+.cafe-entry { background: #fff1d9; color: #422b17; box-shadow: 0 2px 8px #0004; }
+.cafe-entry:disabled { opacity: .6; }
+.cafe-practice {
+  color-scheme: light; width: min(100%, 480px); max-width: 100%; max-height: 100dvh;
+  margin: auto; padding: 0; border: 0; border-radius: 20px; overflow-y: auto;
+  overscroll-behavior: contain; color: #38291e; background: #fff8eb;
+}
+.cafe-practice::backdrop { background: #15100dd9; }
+.cafe-header, .cafe-meta, .cafe-actions { display: flex; align-items: center; gap: 12px; }
+.cafe-header, .cafe-meta { justify-content: space-between; }
+.cafe-header { background: #3e2d23; color: #fff4df; padding: 16px 20px; }
+.cafe-header small, .cafe-step { font-size: .82rem; }
+.cafe-header h1 { font-size: 1.55rem; line-height: 1.25; margin: 3px 0 0; }
+.cafe-header button { color: inherit; border: 1px solid #998475; }
+.cafe-scene {
+  position: relative; height: clamp(124px, 25dvh, 220px); overflow: hidden;
+  background-position: center 50%; background-size: cover; background-color: #704f3c;
+}
+.cafe-scene .tutor-portrait { height: 78%; top: 6%; }
+.cafe-state {
+  position: absolute; bottom: 10px; left: 12px; border-radius: 8px;
+  background: #2c2723; color: white; padding: 5px 12px; font-size: .9rem; font-weight: 700;
+}
+.cafe-state[data-phase=listening] { background: #245843; }
+.cafe-state[data-phase=thinking] { background: #573d71; }
+.cafe-state[data-phase=playing] { background: #834320; }
+.cafe-counter { padding: 16px 20px 22px; }
+.cafe-meta { font-size: .85rem; color: #634a39; }
+.cafe-meta time { font-variant-numeric: tabular-nums; }
+.cafe-step { color: #695140; margin: 16px 0 2px; }
+.cafe-counter h2 { margin: 6px 0 12px; font-size: 1.25rem; }
+.cafe-dialogue { border-block: 1px solid #ddcdb9; padding: 3px 0; }
+.cafe-dialogue p { display: grid; grid-template-columns: 3.4em 1fr; gap: 5px; margin: 9px 0; line-height: 1.5; }
+.cafe-dialogue b, .cafe-receipt b { color: #674a32; font-size: .9em; }
+.cafe-actions { margin-top: 14px; flex-wrap: wrap; }
+.cafe-actions button { background: #ecdfcd; }
+.cafe-actions .cafe-primary { background: #40563d; color: white; }
+.cafe-receipt { margin-top: 12px; }
+.cafe-receipt summary { padding: 12px 0; cursor: pointer; }
+.cafe-receipt ol { padding-left: 1.5em; }
+.cafe-receipt p { margin: 4px 0; }
+@media (max-width: 500px) {
+  .cafe-practice { height: 100dvh; border-radius: 0; }
+  .cafe-header { padding-top: calc(env(safe-area-inset-top) + 14px); }
+  .cafe-counter { padding-bottom: calc(env(safe-area-inset-bottom) + 18px); }
+}
